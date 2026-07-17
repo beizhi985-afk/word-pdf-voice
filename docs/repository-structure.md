@@ -2,9 +2,17 @@
 
 ```text
 单词翻译/
+├─ .obsidian/
+│  ├─ app.json
+│  ├─ appearance.json
+│  └─ core-plugins.json
 ├─ AGENTS.md
 ├─ CHANGELOG.md
 ├─ README.md
+├─ 单词文档配音-完整方案.md
+├─ 单词文档配音方案文档索引.md
+├─ 单词文档配音项目交接文档-2026-07-17.md
+├─ 更新日志.md
 ├─ pyproject.toml
 ├─ spec/
 │  └─ current.md
@@ -37,11 +45,21 @@
 ├─ packaging/
 │  └─ word_voice.spec
 └─ tests/
+   ├─ test_app_worker.py
    ├─ test_core.py
+   ├─ test_anki_export.py
    └─ test_real_pdf.py
 ```
 
 ## 目录职责
+
+### 根目录项目笔记
+
+参考 Obsidian 项目仓库的分类方式，根目录用中文笔记提供“首页、完整方案、文档索引、项目交接、更新日志”五类入口。软件的正式规格和细分经验仍保存在对应工程目录，根目录笔记负责导航和当前状态汇总。
+
+### `.obsidian/`
+
+保存通用知识库配置。`workspace.json` 属于个人窗口状态并被 Git 忽略，避免每次打开仓库都产生无意义变更。
 
 ### `spec/`
 
