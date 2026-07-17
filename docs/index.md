@@ -9,6 +9,7 @@
 - [项目目标与约束](goals-and-constraints.md)：产品目标、开发边界、隐私和技术约束。
 - [仓库结构](repository-structure.md)：目录职责、文档维护规则和文件放置约定。
 - [版本更新与本地数据规则](versioning-and-data.md)：v0.2 独立迁移，以及后续版本采用普通升级的约定。
+- [Anki 安装、导入与学习指南](anki-setup-and-usage.md)：当前电脑的卡组配置、每日学习方法、数据位置和后续导入流程。
 
 ## 开发经验
 
