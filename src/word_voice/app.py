@@ -4,7 +4,7 @@ import sys
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal, Slot
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QApplication,
@@ -173,6 +173,7 @@ class WordVoiceWindow(QMainWindow):
         self.store: VocabularyStore | None = None
         self.stop_event = threading.Event()
         self._threads: list[QThread] = []
+        self._active_workers: dict[QThread, QObject] = {}
         self._build_ui()
 
     def _card(self) -> QFrame:
@@ -195,10 +196,10 @@ class WordVoiceWindow(QMainWindow):
         header.addWidget(title)
         header.addWidget(subtitle)
         header.addStretch()
-        choose_button = QPushButton("选择 PDF")
-        choose_button.setObjectName("primary")
-        choose_button.clicked.connect(self.choose_pdf)
-        header.addWidget(choose_button)
+        self.choose_button = QPushButton("选择 PDF")
+        self.choose_button.setObjectName("primary")
+        self.choose_button.clicked.connect(self.choose_pdf)
+        header.addWidget(self.choose_button)
         root.addLayout(header)
 
         summary_card = self._card()
@@ -286,27 +287,43 @@ class WordVoiceWindow(QMainWindow):
     def _start_worker(self, worker: QObject, run_signal, finish_signals: tuple) -> None:
         thread = QThread(self)
         worker.moveToThread(thread)
+        # Qt 的信号连接不会可靠地替 Python 侧保存工作对象。若这里只保留
+        # QThread，打包后的 worker 可能在 thread.started 触发前被垃圾回收。
+        self._active_workers[thread] = worker
         thread.started.connect(run_signal)
         for signal in finish_signals:
             signal.connect(thread.quit)
             signal.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda: self._threads.remove(thread) if thread in self._threads else None)
+        thread.finished.connect(lambda: self._release_worker(thread))
         self._threads.append(thread)
         thread.start()
+
+    def _release_worker(self, thread: QThread) -> None:
+        self._active_workers.pop(thread, None)
+        if thread in self._threads:
+            self._threads.remove(thread)
 
     @Slot()
     def choose_pdf(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "选择英语词汇 PDF", "", "PDF (*.pdf)")
         if not path:
             return
-        self.pdf_path = Path(path)
+        self.load_pdf(Path(path))
+
+    def load_pdf(self, pdf_path: Path) -> None:
+        if not pdf_path.is_file():
+            self._show_error(f"找不到 PDF：{pdf_path}")
+            return
+        self.pdf_path = pdf_path
+        self.choose_button.setEnabled(False)
+        self.summary_label.setText(f"正在分析：{pdf_path.name}")
         self.status_label.setText("正在分析文档...")
         self.progress.setValue(0)
         worker = ExtractionWorker(self.pdf_path)
         worker.progress.connect(self._on_progress)
         worker.finished.connect(self._on_document)
-        worker.error.connect(self._show_error)
+        worker.error.connect(self._on_extraction_error)
         self._start_worker(worker, worker.run, (worker.finished, worker.error))
 
     @Slot(int, int, str)
@@ -318,6 +335,7 @@ class WordVoiceWindow(QMainWindow):
     def _on_document(self, document, workspace, store) -> None:
         self.workspace = workspace
         self.store = store
+        self.choose_button.setEnabled(True)
         counts = store.audio_counts()
         self.summary_label.setText(
             f"{document.source_path.name} · {document.page_count} 页 · {len(document.entries)} 条 · "
@@ -326,6 +344,12 @@ class WordVoiceWindow(QMainWindow):
         self.status_label.setText("文档分析完成")
         self.progress.setValue(100)
         self.refresh_table()
+
+    @Slot(str)
+    def _on_extraction_error(self, message: str) -> None:
+        self.choose_button.setEnabled(True)
+        self.progress.setValue(0)
+        self._show_error(message)
 
     @Slot()
     def refresh_table(self) -> None:
@@ -501,6 +525,12 @@ def main() -> int:
     application.setStyleSheet(APP_STYLE)
     window = WordVoiceWindow()
     window.show()
+    pdf_argument = next(
+        (Path(argument) for argument in sys.argv[1:] if argument.lower().endswith(".pdf")),
+        None,
+    )
+    if pdf_argument is not None:
+        QTimer.singleShot(0, lambda path=pdf_argument: window.load_pdf(path))
     return application.exec()
 
 

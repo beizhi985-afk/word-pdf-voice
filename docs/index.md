@@ -15,6 +15,7 @@
 - [四级词汇 PDF 表格提取规则](experience-Library/2026-07-17-cet4-pdf-extraction.md)：避免长释义导致纯文本顺序错位。
 - [Windows SQLite 临时文件被占用](experience-Library/2026-07-17-sqlite-windows-lock.md)：显式关闭数据库连接，避免 WinError 32。
 - [Windows eSpeak 无法读取中文安装路径](experience-Library/2026-07-17-espeak-unicode-path.md)：把语音运行时复制到 ASCII 路径。
+- [Qt 后台任务启动后没有执行](experience-Library/2026-07-17-qt-worker-lifetime.md)：保持 worker 强引用，避免打包后静默停滞。
 
 ## 版本规格
 
