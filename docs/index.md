@@ -8,6 +8,7 @@
 - [v0.1 实施方案](implementation-plan.md)：技术结构、模块边界、实施阶段和本地输出约定。
 - [项目目标与约束](goals-and-constraints.md)：产品目标、开发边界、隐私和技术约束。
 - [仓库结构](repository-structure.md)：目录职责、文档维护规则和文件放置约定。
+- [版本更新与本地数据规则](versioning-and-data.md)：v0.2 独立迁移，以及后续版本采用普通升级的约定。
 
 ## 开发经验
 
@@ -17,9 +18,11 @@
 - [Windows eSpeak 无法读取中文安装路径](experience-Library/2026-07-17-espeak-unicode-path.md)：把语音运行时复制到 ASCII 路径。
 - [Qt 后台任务启动后没有执行](experience-Library/2026-07-17-qt-worker-lifetime.md)：保持 worker 强引用，避免打包后静默停滞。
 - [PyInstaller 漏装依赖包数据](experience-Library/2026-07-18-pyinstaller-package-data.md)：构建后用成品程序生成真实 WAV，防止冻结版缺少 JSON 等运行资源。
+- [Anki 教材尖括号标记被隐藏](experience-Library/2026-07-18-anki-html-escaping.md)：导出前转义用户字段，避免 `<古>` 等被当作 HTML。
 
 ## 版本规格
 
 版本规格统一保存在仓库根目录的 `spec/` 中：
 
 - [当前版本规格](../spec/current.md)
+- [v0.1.1 归档规格](../spec/v0.1.1.md)

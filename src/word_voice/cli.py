@@ -8,12 +8,15 @@ from pathlib import Path
 from .anki_export import export_anki_deck
 from .extractor import extract_vocabulary_pdf, write_csv, write_json
 from .samples import select_pronunciation_samples
-from .storage import ProjectWorkspace, VocabularyStore, default_workspace_root
+from .storage import ProjectWorkspace, VocabularyStore, prepare_default_workspace
 from .tts import AudioService, KokoroOnnxEngine, TtsConfig
 
 
 def _workspace(value: str | None, pdf: Path) -> ProjectWorkspace:
-    return ProjectWorkspace.create(value or default_workspace_root(pdf))
+    if value:
+        return ProjectWorkspace.create(value)
+    workspace, _ = prepare_default_workspace(pdf)
+    return workspace
 
 
 def command_extract(args: argparse.Namespace) -> int:
@@ -80,8 +83,14 @@ def command_export_anki(args: argparse.Namespace) -> int:
         print("尚未提取词表，请先运行 extract。", file=sys.stderr)
         return 2
     output = Path(args.output) if args.output else workspace.export_dir / "CET4-4450.apkg"
-    result = export_anki_deck(store.list_entries(), store, output)
-    print(f"Anki 卡组：{result}")
+    result = export_anki_deck(
+        store.list_entries(),
+        store,
+        output,
+        ready_only=args.ready_only,
+        deck_name="英语四级乱序词汇 · 已生成音频" if args.ready_only else "英语四级乱序词汇 4450",
+    )
+    print(f"Anki 卡组：{result.path}（{result.exported_count} 条）")
     return 0
 
 
@@ -109,6 +118,7 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument("pdf")
     export_parser.add_argument("--workspace")
     export_parser.add_argument("--output")
+    export_parser.add_argument("--ready-only", action="store_true", help="只导出已有音频的词条")
     export_parser.set_defaults(handler=command_export_anki)
     return parser
 

@@ -25,10 +25,11 @@ Windows 下的测试清理、项目删除和数据库切换可能失败；长时
 1. 不直接使用 `with sqlite3.connect(...)` 假设连接会关闭。
 2. 新增数据库操作必须使用 `VocabularyStore.session()`。
 3. Windows 临时目录清理测试必须保留。
+4. 使用 `sqlite3.Connection.backup()` 迁移数据库时，源连接和目标连接都必须通过 `closing()` 显式关闭。
 
 ## 相关文件或版本
 
 - `src/word_voice/storage.py`
 - `tests/test_core.py`
-- v0.1
+- v0.1、v0.2 数据迁移
 

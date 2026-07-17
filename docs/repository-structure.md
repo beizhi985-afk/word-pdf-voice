@@ -12,10 +12,12 @@
 ├─ 单词文档配音-完整方案.md
 ├─ 单词文档配音方案文档索引.md
 ├─ 单词文档配音项目交接文档-2026-07-17.md
+├─ 单词文档配音项目交接文档-2026-07-18.md
 ├─ 更新日志.md
 ├─ pyproject.toml
 ├─ spec/
-│  └─ current.md
+│  ├─ current.md
+│  └─ v0.1.1.md
 ├─ assets/
 │  └─ README.md
 ├─ docs/
@@ -23,11 +25,13 @@
 │  ├─ product-brief.md
 │  ├─ implementation-plan.md
 │  ├─ goals-and-constraints.md
+│  ├─ versioning-and-data.md
 │  ├─ repository-structure.md
 │  └─ experience-Library/
 ├─ scenes/
 │  ├─ README.md
-│  └─ v0.1-desktop.md
+│  ├─ v0.1-desktop.md
+│  └─ v0.2-generated-audio.md
 ├─ src/
 │  └─ word_voice/
 │     ├─ extractor.py

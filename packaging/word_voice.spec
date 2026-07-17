@@ -4,6 +4,7 @@ from PyInstaller.utils.hooks import collect_all
 
 
 project_root = Path(SPECPATH).parent
+app_name = "WordPdfVoice-v0.2.0"
 datas = []
 binaries = []
 hiddenimports = []
@@ -47,7 +48,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="WordPdfVoice",
+    name=app_name,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -62,6 +63,6 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="WordPdfVoice",
+    name=app_name,
 )
 

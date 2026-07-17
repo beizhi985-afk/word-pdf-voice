@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -28,12 +29,83 @@ class ProjectWorkspace:
         return cls(root_path, root_path / "project.sqlite3", audio_dir, export_dir)
 
 
-def default_workspace_root(pdf_path: str | Path) -> Path:
-    source = Path(pdf_path)
+@dataclass(frozen=True, slots=True)
+class WorkspaceMigration:
+    performed: bool
+    copied_audio: int = 0
+    unavailable_audio: int = 0
+    source_root: Path | None = None
+
+
+def _local_data_base() -> Path:
     local_app_data = os.environ.get("LOCALAPPDATA")
-    base = Path(local_app_data) if local_app_data else Path.home() / ".word-pdf-voice"
+    return Path(local_app_data) if local_app_data else Path.home() / ".word-pdf-voice"
+
+
+def _safe_project_name(pdf_path: str | Path) -> str:
+    source = Path(pdf_path)
     safe_stem = "".join(ch if ch.isalnum() else "-" for ch in source.stem).strip("-")
-    return base / "WordPdfVoice" / "projects" / safe_stem[:80]
+    return safe_stem[:80]
+
+
+def default_workspace_root(pdf_path: str | Path) -> Path:
+    return _local_data_base() / "WordPdfVoice" / "v0.2" / "projects" / _safe_project_name(pdf_path)
+
+
+def legacy_workspace_root(pdf_path: str | Path) -> Path:
+    return _local_data_base() / "WordPdfVoice" / "projects" / _safe_project_name(pdf_path)
+
+
+def prepare_default_workspace(
+    pdf_path: str | Path,
+) -> tuple[ProjectWorkspace, WorkspaceMigration]:
+    workspace = ProjectWorkspace.create(default_workspace_root(pdf_path))
+    migration = migrate_legacy_workspace(legacy_workspace_root(pdf_path), workspace)
+    return workspace, migration
+
+
+def migrate_legacy_workspace(
+    legacy_root: str | Path,
+    target: ProjectWorkspace,
+) -> WorkspaceMigration:
+    """Create an independent v0.2 snapshot of a v0.1 project once."""
+    source_root = Path(legacy_root).expanduser().resolve()
+    source_database = source_root / "project.sqlite3"
+    if target.database_path.exists() or not source_database.is_file():
+        return WorkspaceMigration(False, source_root=source_root)
+
+    target.database_path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(source_database)) as source, closing(
+        sqlite3.connect(target.database_path)
+    ) as destination:
+        source.backup(destination)
+        destination.commit()
+
+    store = VocabularyStore(target.database_path)
+    copied = 0
+    unavailable = 0
+    with store.session() as connection:
+        rows = connection.execute(
+            "SELECT sequence, audio_path FROM entries WHERE audio_status='ready'"
+        ).fetchall()
+    for row in rows:
+        source_audio = Path(row["audio_path"]) if row["audio_path"] else None
+        if not source_audio or not source_audio.is_file():
+            store.mark_audio_missing(int(row["sequence"]))
+            unavailable += 1
+            continue
+        target_audio = target.audio_dir / source_audio.name
+        try:
+            shutil.copy2(source_audio, target_audio)
+        except OSError:
+            store.mark_audio_missing(int(row["sequence"]))
+            unavailable += 1
+            continue
+        store.mark_audio_ready(int(row["sequence"]), target_audio)
+        copied += 1
+    store.set_metadata("data_version", "0.2")
+    store.set_metadata("migrated_from", str(source_root))
+    return WorkspaceMigration(True, copied, unavailable, source_root)
 
 
 class VocabularyStore:
@@ -163,6 +235,7 @@ class VocabularyStore:
         search: str = "",
         issues_only: bool = False,
         limit: int | None = None,
+        audio_ready_only: bool = False,
     ) -> list[VocabularyEntry]:
         query = "SELECT * FROM entries"
         clauses: list[str] = []
@@ -173,6 +246,8 @@ class VocabularyStore:
             parameters.extend((pattern, pattern, pattern))
         if issues_only:
             clauses.append("flags_json <> '[]'")
+        if audio_ready_only:
+            clauses.append("audio_status = 'ready'")
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY sequence"
@@ -234,6 +309,14 @@ class VocabularyStore:
             connection.execute(
                 "UPDATE entries SET audio_status='failed', audio_error=? WHERE sequence=?",
                 (error[:1000], sequence),
+            )
+
+    def mark_audio_missing(self, sequence: int) -> None:
+        with self.session() as connection:
+            connection.execute(
+                "UPDATE entries SET audio_status='missing', audio_path='', audio_error='' "
+                "WHERE sequence=?",
+                (sequence,),
             )
 
     def audio_record(self, sequence: int) -> tuple[str, str, str]:

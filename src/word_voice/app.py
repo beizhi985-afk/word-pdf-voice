@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import traceback
@@ -32,11 +33,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import __version__
 from .anki_export import AnkiExportError, export_anki_deck
 from .extractor import extract_vocabulary_pdf
 from .models import VocabularyEntry
 from .samples import select_pronunciation_samples
-from .storage import ProjectWorkspace, VocabularyStore, default_workspace_root
+from .storage import ProjectWorkspace, VocabularyStore, prepare_default_workspace
 from .tts import AudioService, KokoroOnnxEngine, TtsConfig
 
 
@@ -108,7 +110,7 @@ def run_portable_tts_smoke(output_path: Path) -> int:
 
 class ExtractionWorker(QObject):
     progress = Signal(int, int, str)
-    finished = Signal(object, object, object)
+    finished = Signal(object, object, object, object)
     error = Signal(str)
 
     def __init__(self, pdf_path: Path):
@@ -124,10 +126,11 @@ class ExtractionWorker(QObject):
                     current, total, f"正在分析第 {current}/{total} 页"
                 ),
             )
-            workspace = ProjectWorkspace.create(default_workspace_root(self.pdf_path))
+            self.progress.emit(0, 0, "正在准备 v0.2 项目数据...")
+            workspace, migration = prepare_default_workspace(self.pdf_path)
             store = VocabularyStore(workspace.database_path)
             store.import_document(document)
-            self.finished.emit(document, workspace, store)
+            self.finished.emit(document, workspace, store, migration)
         except Exception as exc:
             self.error.emit(f"文档分析失败：{exc}")
 
@@ -212,10 +215,11 @@ class EntryEditDialog(QDialog):
 class WordVoiceWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("单词文档配音 v0.1.1")
+        self.setWindowTitle(f"单词文档配音 v{__version__}")
         self.resize(1180, 780)
         self.setMinimumSize(980, 640)
         self.pdf_path: Path | None = None
+        self.document = None
         self.workspace: ProjectWorkspace | None = None
         self.store: VocabularyStore | None = None
         self.stop_event = threading.Event()
@@ -270,6 +274,9 @@ class WordVoiceWindow(QMainWindow):
         self.issues_only = QCheckBox("只看异常")
         self.issues_only.toggled.connect(self.refresh_table)
         toolbar.addWidget(self.issues_only)
+        self.audio_ready_only = QCheckBox("只看已有音频")
+        self.audio_ready_only.toggled.connect(self.refresh_table)
+        toolbar.addWidget(self.audio_ready_only)
         toolbar.addSpacing(10)
         toolbar.addWidget(QLabel("声音"))
         self.voice = QComboBox()
@@ -309,12 +316,16 @@ class WordVoiceWindow(QMainWindow):
             ("生成 30 词样本", self.generate_samples),
             ("生成全部", self.generate_all),
             ("停止", self.stop_generation),
+            ("打开音频文件夹", self.open_audio_folder),
         ):
             button = QPushButton(label)
             button.clicked.connect(handler)
             actions.addWidget(button)
         actions.addStretch()
-        export_button = QPushButton("导出 Anki")
+        ready_export_button = QPushButton("导出已有音频")
+        ready_export_button.clicked.connect(self.export_ready_anki)
+        actions.addWidget(ready_export_button)
+        export_button = QPushButton("导出全部 Anki")
         export_button.setObjectName("primary")
         export_button.clicked.connect(self.export_anki)
         actions.addWidget(export_button)
@@ -378,19 +389,29 @@ class WordVoiceWindow(QMainWindow):
         self.progress.setValue(int(current / total * 100) if total else 0)
         self.status_label.setText(message)
 
-    @Slot(object, object, object)
-    def _on_document(self, document, workspace, store) -> None:
+    @Slot(object, object, object, object)
+    def _on_document(self, document, workspace, store, migration) -> None:
+        self.document = document
         self.workspace = workspace
         self.store = store
         self.choose_button.setEnabled(True)
-        counts = store.audio_counts()
-        self.summary_label.setText(
-            f"{document.source_path.name} · {document.page_count} 页 · {len(document.entries)} 条 · "
-            f"异常 {document.flagged_count} 条 · 已有音频 {counts['ready']} 条"
-        )
-        self.status_label.setText("文档分析完成")
+        self._refresh_summary()
+        if migration.performed:
+            self.status_label.setText(f"已从 v0.1 复制 {migration.copied_audio} 条音频到 v0.2")
+        else:
+            self.status_label.setText("文档分析完成")
         self.progress.setValue(100)
         self.refresh_table()
+
+    def _refresh_summary(self) -> None:
+        if not self.document or not self.store:
+            return
+        counts = self.store.audio_counts()
+        self.summary_label.setText(
+            f"{self.document.source_path.name} · {self.document.page_count} 页 · "
+            f"{len(self.document.entries)} 条 · 异常 {self.document.flagged_count} 条 · "
+            f"已有音频 {counts['ready']} 条"
+        )
 
     @Slot(str)
     def _on_extraction_error(self, message: str) -> None:
@@ -406,6 +427,7 @@ class WordVoiceWindow(QMainWindow):
         entries = self.store.list_entries(
             search=self.search.text().strip(),
             issues_only=self.issues_only.isChecked(),
+            audio_ready_only=self.audio_ready_only.isChecked(),
         )
         statuses = self.store.audio_status_map()
         self.table.setSortingEnabled(False)
@@ -463,6 +485,7 @@ class WordVoiceWindow(QMainWindow):
     @Slot(str)
     def _on_played(self, message: str) -> None:
         self.status_label.setText(message)
+        self._refresh_summary()
         self.refresh_table()
 
     @Slot()
@@ -515,6 +538,7 @@ class WordVoiceWindow(QMainWindow):
     @Slot(int, int)
     def _on_generation_finished(self, completed: int, failed: int) -> None:
         self.status_label.setText(f"生成结束：完成 {completed}，失败 {failed}")
+        self._refresh_summary()
         self.refresh_table()
 
     @Slot()
@@ -523,19 +547,57 @@ class WordVoiceWindow(QMainWindow):
         self.status_label.setText("将在当前单词完成后停止")
 
     @Slot()
+    def open_audio_folder(self) -> None:
+        if not self.workspace:
+            QMessageBox.information(self, "请先选择 PDF", "请先导入目标 PDF。")
+            return
+        try:
+            os.startfile(self.workspace.audio_dir)
+        except OSError as exc:
+            self._show_error(f"无法打开音频文件夹：{exc}")
+
+    @Slot()
+    def export_ready_anki(self) -> None:
+        self._export_anki(ready_only=True)
+
+    @Slot()
     def export_anki(self) -> None:
+        self._export_anki(ready_only=False)
+
+    def _export_anki(self, ready_only: bool) -> None:
         if not self.store:
             QMessageBox.information(self, "请先选择 PDF", "请先导入目标 PDF。")
             return
+        ready_count = self.store.audio_counts()["ready"]
+        if ready_only and not ready_count:
+            QMessageBox.information(self, "还没有音频", "请先生成或试听至少一个单词。")
+            return
+        default_name = (
+            f"CET4-已有音频-{ready_count}.apkg" if ready_only else "CET4-4450.apkg"
+        )
         output, _ = QFileDialog.getSaveFileName(
-            self, "导出 Anki 卡组", "CET4-4450.apkg", "Anki 卡组 (*.apkg)"
+            self, "导出 Anki 卡组", default_name, "Anki 卡组 (*.apkg)"
         )
         if not output:
             return
         try:
-            result = export_anki_deck(self.store.list_entries(), self.store, output)
-            QMessageBox.information(self, "导出完成", f"Anki 卡组已保存到：\n{result}")
-            self.status_label.setText(f"已导出：{result}")
+            result = export_anki_deck(
+                self.store.list_entries(),
+                self.store,
+                output,
+                deck_name=(
+                    "英语四级乱序词汇 · 已生成音频"
+                    if ready_only
+                    else "英语四级乱序词汇 4450"
+                ),
+                ready_only=ready_only,
+            )
+            QMessageBox.information(
+                self,
+                "导出完成",
+                f"已导出 {result.exported_count} 条词卡：\n{result.path}",
+            )
+            self.status_label.setText(f"已导出 {result.exported_count} 条：{result.path}")
         except AnkiExportError as exc:
             QMessageBox.warning(self, "暂时不能导出", str(exc))
         except Exception as exc:

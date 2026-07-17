@@ -9,7 +9,7 @@ import weakref
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QObject, QEventLoop, QThread, QTimer, Signal, Slot
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 
 from word_voice.app import WordVoiceWindow
 
@@ -51,6 +51,16 @@ class WorkerLifetimeTests(unittest.TestCase):
             time.sleep(0.01)
         self.assertFalse(window._threads)
         self.assertFalse(window._active_workers)
+        window.close()
+
+    def test_v02_controls_are_visible(self) -> None:
+        window = WordVoiceWindow()
+        labels = {button.text() for button in window.findChildren(QPushButton)}
+        self.assertEqual("单词文档配音 v0.2.0", window.windowTitle())
+        self.assertEqual("只看已有音频", window.audio_ready_only.text())
+        self.assertIn("打开音频文件夹", labels)
+        self.assertIn("导出已有音频", labels)
+        self.assertIn("导出全部 Anki", labels)
         window.close()
 
 
