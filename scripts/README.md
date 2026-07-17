@@ -7,6 +7,7 @@
 - `setup.ps1`：创建虚拟环境、安装依赖并准备本地语音模型。
 - `setup_models.py`：从 Kokoro ONNX 官方发布页下载量化模型与声音数据。
 - `build.ps1`：构建包含 Python、Qt 和本地语音模型的 Windows 独立运行文件夹。
+- `verify_portable.py`：调用构建后的成品程序生成真实 WAV，检查冻结版运行资源是否完整。
 - `run_app.py`：启动 Windows 桌面界面。
 - `extract_pdf.py`：只执行 PDF 提取并生成 CSV、JSON 与 SQLite。
 

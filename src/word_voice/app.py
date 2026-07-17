@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import traceback
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal, Slot
@@ -57,6 +58,52 @@ QHeaderView::section { background: #f1f5f9; border: none; border-bottom: 1px sol
 QProgressBar { background: #dbe3ee; border: none; border-radius: 5px; height: 10px; text-align: center; }
 QProgressBar::chunk { background: #2457c5; border-radius: 5px; }
 """
+
+
+def bundled_model_paths() -> tuple[Path, Path] | None:
+    candidates_root: list[Path] = []
+    if getattr(sys, "frozen", False):
+        candidates_root.append(Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)))
+        candidates_root.append(Path(sys.executable).resolve().parent)
+    candidates_root.append(Path(__file__).resolve().parents[2])
+    model_dir = next(
+        (root / "models" for root in candidates_root if (root / "models").is_dir()),
+        candidates_root[0] / "models",
+    )
+    model = next(
+        (
+            path
+            for path in (
+                model_dir / "kokoro-v1.0.int8.onnx",
+                model_dir / "kokoro-v1.0.onnx",
+            )
+            if path.is_file()
+        ),
+        None,
+    )
+    voices = model_dir / "voices-v1.0.bin"
+    if not model or not voices.is_file():
+        return None
+    return model, voices
+
+
+def run_portable_tts_smoke(output_path: Path) -> int:
+    """Generate one real WAV so a packaged build can prove its runtime is complete."""
+    error_path = output_path.with_suffix(output_path.suffix + ".error.txt")
+    try:
+        paths = bundled_model_paths()
+        if not paths:
+            raise RuntimeError("便携版缺少 Kokoro 模型或声音文件")
+        config = TtsConfig(paths[0], paths[1], "af_sarah", 0.9, "en-us")
+        entry = VocabularyEntry(1, "alternative", "", "便携版发音测试", 1)
+        KokoroOnnxEngine(config).synthesize(entry, output_path)
+        if error_path.is_file():
+            error_path.unlink()
+        return 0
+    except Exception:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        error_path.write_text(traceback.format_exc(), encoding="utf-8")
+        return 1
 
 
 class ExtractionWorker(QObject):
@@ -165,7 +212,7 @@ class EntryEditDialog(QDialog):
 class WordVoiceWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("单词文档配音 v0.1")
+        self.setWindowTitle("单词文档配音 v0.1.1")
         self.resize(1180, 780)
         self.setMinimumSize(980, 640)
         self.pdf_path: Path | None = None
@@ -384,31 +431,11 @@ class WordVoiceWindow(QMainWindow):
         return self.store.get_entry(int(sequence_item.text())) if sequence_item else None
 
     def _model_paths(self) -> tuple[Path, Path] | None:
-        candidates_root: list[Path] = []
-        if getattr(sys, "frozen", False):
-            candidates_root.append(Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)))
-            candidates_root.append(Path(sys.executable).resolve().parent)
-        candidates_root.append(Path(__file__).resolve().parents[2])
-        model_dir = next(
-            (root / "models" for root in candidates_root if (root / "models").is_dir()),
-            candidates_root[0] / "models",
-        )
-        model = next(
-            (
-                path
-                for path in (
-                    model_dir / "kokoro-v1.0.int8.onnx",
-                    model_dir / "kokoro-v1.0.onnx",
-                )
-                if path.is_file()
-            ),
-            None,
-        )
-        voices = model_dir / "voices-v1.0.bin"
-        if not model or not voices.is_file():
+        paths = bundled_model_paths()
+        if not paths:
             QMessageBox.warning(self, "尚未准备语音模型", "请先运行 scripts/setup_models.py。")
             return None
-        return model, voices
+        return paths
 
     def _audio_service(self) -> AudioService | None:
         if not self.store or not self.workspace:
@@ -521,6 +548,12 @@ class WordVoiceWindow(QMainWindow):
 
 
 def main() -> int:
+    arguments = sys.argv[1:]
+    if "--smoke-tts" in arguments:
+        argument_index = arguments.index("--smoke-tts")
+        if argument_index + 1 >= len(arguments):
+            return 2
+        return run_portable_tts_smoke(Path(arguments[argument_index + 1]))
     application = QApplication.instance() or QApplication(sys.argv)
     application.setStyleSheet(APP_STYLE)
     window = WordVoiceWindow()

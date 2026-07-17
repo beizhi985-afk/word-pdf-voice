@@ -16,6 +16,7 @@
 - [Windows SQLite 临时文件被占用](experience-Library/2026-07-17-sqlite-windows-lock.md)：显式关闭数据库连接，避免 WinError 32。
 - [Windows eSpeak 无法读取中文安装路径](experience-Library/2026-07-17-espeak-unicode-path.md)：把语音运行时复制到 ASCII 路径。
 - [Qt 后台任务启动后没有执行](experience-Library/2026-07-17-qt-worker-lifetime.md)：保持 worker 强引用，避免打包后静默停滞。
+- [PyInstaller 漏装依赖包数据](experience-Library/2026-07-18-pyinstaller-package-data.md)：构建后用成品程序生成真实 WAV，防止冻结版缺少 JSON 等运行资源。
 
 ## 版本规格
 

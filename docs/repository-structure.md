@@ -40,6 +40,7 @@
 │  ├─ setup.ps1
 │  ├─ setup_models.py
 │  ├─ build.ps1
+│  ├─ verify_portable.py
 │  ├─ run_app.py
 │  └─ extract_pdf.py
 ├─ packaging/
@@ -48,6 +49,7 @@
    ├─ test_app_worker.py
    ├─ test_core.py
    ├─ test_anki_export.py
+   ├─ test_packaging.py
    └─ test_real_pdf.py
 ```
 

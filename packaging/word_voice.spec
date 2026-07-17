@@ -12,6 +12,7 @@ for package in (
     "kokoro_onnx",
     "espeakng_loader",
     "phonemizer",
+    "language_tags",
     "pdfplumber",
     "genanki",
     "soundfile",
