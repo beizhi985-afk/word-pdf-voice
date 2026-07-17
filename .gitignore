@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Node
+node_modules/
+build/
+dist/
+.next/
+
+# Generated outputs and local models
+output/
+outputs/
+models/
+*.sqlite3
+vocabulary.csv
+vocabulary.json
+*.apkg
+*.wav
+*.mp3
+*.m4a
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
