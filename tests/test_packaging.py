@@ -17,11 +17,11 @@ class PackagingRegressionTests(unittest.TestCase):
         self.assertIn("verify_portable.py", build_script)
         self.assertTrue((ROOT / "scripts" / "verify_portable.py").is_file())
 
-    def test_v02_build_has_an_independent_directory(self) -> None:
+    def test_build_uses_current_version_name(self) -> None:
         specification = (ROOT / "packaging" / "word_voice.spec").read_text(encoding="utf-8")
         build_script = (ROOT / "scripts" / "build.ps1").read_text(encoding="utf-8")
-        self.assertIn('app_name = "WordPdfVoice-v0.2.0"', specification)
-        self.assertIn("dist\\WordPdfVoice-v0.2.0\\WordPdfVoice-v0.2.0.exe", build_script)
+        self.assertIn('app_name = "WordPdfVoice-v0.2.1"', specification)
+        self.assertIn("dist\\WordPdfVoice-v0.2.1\\WordPdfVoice-v0.2.1.exe", build_script)
 
 
 if __name__ == "__main__":

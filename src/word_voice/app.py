@@ -89,14 +89,19 @@ def bundled_model_paths() -> tuple[Path, Path] | None:
     return model, voices
 
 
-def run_portable_tts_smoke(output_path: Path) -> int:
+def run_portable_tts_smoke(
+    output_path: Path,
+    voice: str = "af_sarah",
+    speed: float = 0.9,
+) -> int:
     """Generate one real WAV so a packaged build can prove its runtime is complete."""
     error_path = output_path.with_suffix(output_path.suffix + ".error.txt")
     try:
         paths = bundled_model_paths()
         if not paths:
             raise RuntimeError("便携版缺少 Kokoro 模型或声音文件")
-        config = TtsConfig(paths[0], paths[1], "af_sarah", 0.9, "en-us")
+        language = "en-gb" if voice.startswith("b") else "en-us"
+        config = TtsConfig(paths[0], paths[1], voice, speed, language)
         entry = VocabularyEntry(1, "alternative", "", "便携版发音测试", 1)
         KokoroOnnxEngine(config).synthesize(entry, output_path)
         if error_path.is_file():
@@ -280,14 +285,30 @@ class WordVoiceWindow(QMainWindow):
         toolbar.addSpacing(10)
         toolbar.addWidget(QLabel("声音"))
         self.voice = QComboBox()
-        self.voice.addItems(("af_sarah", "af_heart", "am_adam", "bf_emma"))
+        for label, voice_id in (
+            ("美式女声 · Sarah", "af_sarah"),
+            ("美式女声 · Heart", "af_heart"),
+            ("美式男声 · Adam", "am_adam"),
+            ("英式女声 · Emma", "bf_emma"),
+        ):
+            self.voice.addItem(label, voice_id)
+        self.voice.setToolTip("更换声音后，下次试听或生成会重新制作对应音频")
         toolbar.addWidget(self.voice)
         toolbar.addWidget(QLabel("语速"))
         self.speed = QDoubleSpinBox()
         self.speed.setRange(0.6, 1.3)
         self.speed.setSingleStep(0.1)
+        self.speed.setDecimals(2)
+        self.speed.setSuffix(" 倍")
         self.speed.setValue(0.9)
+        self.speed.setToolTip("改变语速后，下次试听或生成会重新制作对应音频")
         toolbar.addWidget(self.speed)
+        toolbar.addSpacing(10)
+        toolbar.addWidget(QLabel("排序"))
+        self.sort_order = QComboBox()
+        self.sort_order.addItem("序号从小到大", "asc")
+        self.sort_order.addItem("序号从大到小", "desc")
+        toolbar.addWidget(self.sort_order)
         toolbar.addStretch()
         root.addWidget(toolbar_card)
 
@@ -341,6 +362,9 @@ class WordVoiceWindow(QMainWindow):
         footer_layout.addWidget(self.progress, 1)
         footer_layout.addWidget(self.status_label)
         root.addWidget(footer)
+        self.voice.currentIndexChanged.connect(self._on_tts_settings_changed)
+        self.speed.valueChanged.connect(self._on_tts_settings_changed)
+        self.sort_order.currentIndexChanged.connect(self.refresh_table)
 
     def _start_worker(self, worker: QObject, run_signal, finish_signals: tuple) -> None:
         thread = QThread(self)
@@ -437,13 +461,23 @@ class WordVoiceWindow(QMainWindow):
             status = entry.flag_text or state
             values = (entry.sequence, entry.word, entry.phonetic, entry.meaning, entry.page, status)
             for column, value in enumerate(values):
-                item = QTableWidgetItem(str(value))
+                item = QTableWidgetItem()
+                if column in (0, 4):
+                    item.setData(Qt.DisplayRole, int(value))
+                else:
+                    item.setText(str(value))
                 if column in (0, 4):
                     item.setTextAlignment(Qt.AlignCenter)
                 if entry.has_issue:
                     item.setBackground(QColor("#fff7ed"))
                 self.table.setItem(row_index, column, item)
         self.table.setSortingEnabled(True)
+        order = Qt.DescendingOrder if self.sort_order.currentData() == "desc" else Qt.AscendingOrder
+        self.table.sortItems(0, order)
+
+    @Slot()
+    def _on_tts_settings_changed(self) -> None:
+        self.status_label.setText("声音或语速已更改；下次试听或生成时会重新制作对应音频")
 
     def selected_entry(self) -> VocabularyEntry | None:
         if not self.store or self.table.currentRow() < 0:
@@ -466,8 +500,9 @@ class WordVoiceWindow(QMainWindow):
         paths = self._model_paths()
         if not paths:
             return None
-        language = "en-gb" if self.voice.currentText().startswith("b") else "en-us"
-        config = TtsConfig(paths[0], paths[1], self.voice.currentText(), self.speed.value(), language)
+        voice_id = str(self.voice.currentData())
+        language = "en-gb" if voice_id.startswith("b") else "en-us"
+        config = TtsConfig(paths[0], paths[1], voice_id, self.speed.value(), language)
         return AudioService(self.store, self.workspace.audio_dir, KokoroOnnxEngine(config))
 
     @Slot()
@@ -615,7 +650,12 @@ def main() -> int:
         argument_index = arguments.index("--smoke-tts")
         if argument_index + 1 >= len(arguments):
             return 2
-        return run_portable_tts_smoke(Path(arguments[argument_index + 1]))
+        voice = arguments[argument_index + 2] if argument_index + 2 < len(arguments) else "af_sarah"
+        try:
+            speed = float(arguments[argument_index + 3]) if argument_index + 3 < len(arguments) else 0.9
+        except ValueError:
+            return 2
+        return run_portable_tts_smoke(Path(arguments[argument_index + 1]), voice, speed)
     application = QApplication.instance() or QApplication(sys.argv)
     application.setStyleSheet(APP_STYLE)
     window = WordVoiceWindow()

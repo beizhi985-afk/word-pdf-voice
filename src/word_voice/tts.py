@@ -25,6 +25,20 @@ class TtsConfig:
     language: str = "en-us"
 
 
+def tts_profile_key(config: TtsConfig) -> str:
+    """Return the cache identity for settings that change synthesized audio."""
+    return f"kokoro-v1|{config.voice}|{config.speed:.2f}|{config.language}"
+
+
+def is_legacy_default_profile(config: TtsConfig) -> bool:
+    """v0.2.0 audio had no profile metadata and used these defaults."""
+    return (
+        config.voice == "af_sarah"
+        and abs(config.speed - 0.9) < 0.0001
+        and config.language == "en-us"
+    )
+
+
 def audio_filename(entry: VocabularyEntry) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", entry.word.casefold()).strip("-") or "word"
     return f"cet4_{entry.sequence:04d}_{slug[:48]}.wav"
@@ -34,6 +48,14 @@ class KokoroOnnxEngine:
     def __init__(self, config: TtsConfig):
         self.config = config
         self._kokoro = None
+
+    @property
+    def profile_key(self) -> str:
+        return tts_profile_key(self.config)
+
+    @property
+    def accepts_legacy_default_cache(self) -> bool:
+        return is_legacy_default_profile(self.config)
 
     def _load(self):
         if self._kokoro is not None:
@@ -94,12 +116,20 @@ class AudioService:
 
     def ensure_audio(self, entry: VocabularyEntry, force: bool = False) -> Path:
         status, stored_path, _ = self.store.audio_record(entry.sequence)
+        stored_profile = self.store.audio_profile(entry.sequence)
+        current_profile = self.engine.profile_key
         if not force and status == "ready" and stored_path and Path(stored_path).is_file():
-            return Path(stored_path)
+            if stored_profile == current_profile:
+                return Path(stored_path)
+            if not stored_profile and self.engine.accepts_legacy_default_cache:
+                # v0.2.0 did not persist a profile. Its fixed defaults are known,
+                # so keep that audio and upgrade the cache metadata in place.
+                self.store.mark_audio_ready(entry.sequence, stored_path, current_profile)
+                return Path(stored_path)
         target = self.audio_dir / audio_filename(entry)
         try:
             result = self.engine.synthesize(entry, target)
-            self.store.mark_audio_ready(entry.sequence, result)
+            self.store.mark_audio_ready(entry.sequence, result, current_profile)
             return result
         except Exception as exc:
             self.store.mark_audio_failed(entry.sequence, str(exc))

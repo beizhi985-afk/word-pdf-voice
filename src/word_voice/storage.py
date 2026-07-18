@@ -152,10 +152,18 @@ class VocabularyStore:
                     manually_edited INTEGER NOT NULL DEFAULT 0,
                     audio_status TEXT NOT NULL DEFAULT 'missing',
                     audio_path TEXT NOT NULL DEFAULT '',
-                    audio_error TEXT NOT NULL DEFAULT ''
+                    audio_error TEXT NOT NULL DEFAULT '',
+                    audio_profile TEXT NOT NULL DEFAULT ''
                 );
                 """
             )
+            columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(entries)").fetchall()
+            }
+            if "audio_profile" not in columns:
+                connection.execute(
+                    "ALTER TABLE entries ADD COLUMN audio_profile TEXT NOT NULL DEFAULT ''"
+                )
 
     def set_metadata(self, key: str, value: str) -> None:
         with self.session() as connection:
@@ -278,7 +286,8 @@ class VocabularyStore:
                 """
                 UPDATE entries
                 SET word=?, phonetic=?, meaning=?, pronunciation_override=?,
-                    manually_edited=1, audio_status='missing', audio_path='', audio_error=''
+                    manually_edited=1, audio_status='missing', audio_path='', audio_error='',
+                    audio_profile=''
                 WHERE sequence=?
                 """,
                 (word.strip(), phonetic.strip(), meaning.strip(), pronunciation_override.strip(), sequence),
@@ -290,18 +299,24 @@ class VocabularyStore:
                 """
                 UPDATE entries
                 SET word=source_word, phonetic=source_phonetic, meaning=source_meaning,
-                    pronunciation_override='', manually_edited=0,
-                    audio_status='missing', audio_path='', audio_error=''
+                    pronunciation_override='', manually_edited=0, audio_status='missing',
+                    audio_path='', audio_error='', audio_profile=''
                 WHERE sequence=?
                 """,
                 (sequence,),
             )
 
-    def mark_audio_ready(self, sequence: int, audio_path: str | Path) -> None:
+    def mark_audio_ready(
+        self,
+        sequence: int,
+        audio_path: str | Path,
+        audio_profile: str = "",
+    ) -> None:
         with self.session() as connection:
             connection.execute(
-                "UPDATE entries SET audio_status='ready', audio_path=?, audio_error='' WHERE sequence=?",
-                (str(Path(audio_path).resolve()), sequence),
+                "UPDATE entries SET audio_status='ready', audio_path=?, audio_error='', "
+                "audio_profile=? WHERE sequence=?",
+                (str(Path(audio_path).resolve()), audio_profile, sequence),
             )
 
     def mark_audio_failed(self, sequence: int, error: str) -> None:
@@ -314,7 +329,8 @@ class VocabularyStore:
     def mark_audio_missing(self, sequence: int) -> None:
         with self.session() as connection:
             connection.execute(
-                "UPDATE entries SET audio_status='missing', audio_path='', audio_error='' "
+                "UPDATE entries SET audio_status='missing', audio_path='', audio_error='', "
+                "audio_profile='' "
                 "WHERE sequence=?",
                 (sequence,),
             )
@@ -328,6 +344,13 @@ class VocabularyStore:
         if not row:
             return "missing", "", ""
         return row["audio_status"], row["audio_path"], row["audio_error"]
+
+    def audio_profile(self, sequence: int) -> str:
+        with self.session() as connection:
+            row = connection.execute(
+                "SELECT audio_profile FROM entries WHERE sequence=?", (sequence,)
+            ).fetchone()
+        return row["audio_profile"] if row else ""
 
     def audio_counts(self) -> dict[str, int]:
         result = {"missing": 0, "ready": 0, "failed": 0}

@@ -12,7 +12,7 @@ from word_voice.storage import (
     VocabularyStore,
     migrate_legacy_workspace,
 )
-from word_voice.tts import audio_filename
+from word_voice.tts import AudioService, audio_filename
 
 
 def entry(sequence: int, word: str, flags: tuple[str, ...] = ()) -> VocabularyEntry:
@@ -31,6 +31,65 @@ class SampleSelectionTests(unittest.TestCase):
         second = audio_filename(entry(804, "present"))
         self.assertNotEqual(first, second)
         self.assertTrue(first.startswith("cet4_0616_"))
+
+
+class RecordingEngine:
+    def __init__(self, profile_key: str, accepts_legacy_default_cache: bool = False):
+        self.profile_key = profile_key
+        self.accepts_legacy_default_cache = accepts_legacy_default_cache
+        self.calls = 0
+
+    def synthesize(self, item: VocabularyEntry, output_path: Path) -> Path:
+        self.calls += 1
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(self.profile_key, encoding="utf-8")
+        return output_path
+
+
+class AudioProfileCacheTests(unittest.TestCase):
+    def test_changed_voice_or_speed_regenerates_cached_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = VocabularyStore(root / "test.sqlite3")
+            item = entry(1, "alternative")
+            store.import_document(
+                ExtractedDocument(Path("sample.pdf"), "abc", 1, [item], [])
+            )
+            first_engine = RecordingEngine("kokoro-v1|af_sarah|0.90|en-us")
+            first_service = AudioService(store, root / "audio", first_engine)
+
+            first_service.ensure_audio(item)
+            first_service.ensure_audio(item)
+
+            self.assertEqual(1, first_engine.calls)
+            second_engine = RecordingEngine("kokoro-v1|am_adam|0.70|en-us")
+            second_service = AudioService(store, root / "audio", second_engine)
+            result = second_service.ensure_audio(item)
+            self.assertEqual(1, second_engine.calls)
+            self.assertEqual(second_engine.profile_key, result.read_text(encoding="utf-8"))
+            self.assertEqual(second_engine.profile_key, store.audio_profile(item.sequence))
+
+    def test_v020_default_audio_is_reused_and_profile_is_backfilled(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = VocabularyStore(root / "test.sqlite3")
+            item = entry(1, "alternative")
+            store.import_document(
+                ExtractedDocument(Path("sample.pdf"), "abc", 1, [item], [])
+            )
+            existing = root / "audio" / "existing.wav"
+            existing.parent.mkdir(parents=True)
+            existing.write_bytes(b"legacy")
+            store.mark_audio_ready(item.sequence, existing)
+            engine = RecordingEngine(
+                "kokoro-v1|af_sarah|0.90|en-us", accepts_legacy_default_cache=True
+            )
+
+            result = AudioService(store, root / "audio", engine).ensure_audio(item)
+
+            self.assertEqual(existing, result)
+            self.assertEqual(0, engine.calls)
+            self.assertEqual(engine.profile_key, store.audio_profile(item.sequence))
 
 
 class StorageTests(unittest.TestCase):

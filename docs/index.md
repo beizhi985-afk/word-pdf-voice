@@ -20,6 +20,7 @@
 - [Qt 后台任务启动后没有执行](experience-Library/2026-07-17-qt-worker-lifetime.md)：保持 worker 强引用，避免打包后静默停滞。
 - [PyInstaller 漏装依赖包数据](experience-Library/2026-07-18-pyinstaller-package-data.md)：构建后用成品程序生成真实 WAV，防止冻结版缺少 JSON 等运行资源。
 - [Anki 教材尖括号标记被隐藏](experience-Library/2026-07-18-anki-html-escaping.md)：导出前转义用户字段，避免 `<古>` 等被当作 HTML。
+- [语音设置变化但仍播放旧缓存](experience-Library/2026-07-18-tts-profile-cache.md)：把声音、语速和语言纳入缓存配置，避免继续播放旧 WAV。
 
 ## 版本规格
 
