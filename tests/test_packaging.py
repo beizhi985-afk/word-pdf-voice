@@ -22,8 +22,8 @@ class PackagingRegressionTests(unittest.TestCase):
     def test_build_uses_current_version_name(self) -> None:
         specification = (ROOT / "packaging" / "word_voice.spec").read_text(encoding="utf-8")
         build_script = (ROOT / "scripts" / "build.ps1").read_text(encoding="utf-8")
-        self.assertIn('app_name = "WordPdfVoice-v0.3.1"', specification)
-        self.assertIn("dist\\WordPdfVoice-v0.3.1\\WordPdfVoice-v0.3.1.exe", build_script)
+        self.assertIn('app_name = "WordPdfVoice-v0.3.2"', specification)
+        self.assertIn("dist\\WordPdfVoice-v0.3.2\\WordPdfVoice-v0.3.2.exe", build_script)
 
     def test_ui_stickers_and_book_icon_are_transparent_and_packaged(self) -> None:
         specification = (ROOT / "packaging" / "word_voice.spec").read_text(encoding="utf-8")

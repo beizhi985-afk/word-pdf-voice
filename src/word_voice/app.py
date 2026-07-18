@@ -7,7 +7,7 @@ import threading
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSettings, QThread, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal, Slot
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -24,6 +24,8 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QProgressBar,
@@ -41,7 +43,14 @@ from .anki_export import AnkiExportError, export_anki_deck
 from .extractor import extract_vocabulary_pdf
 from .models import VocabularyEntry
 from .samples import select_pronunciation_samples
-from .storage import ProjectWorkspace, VocabularyStore, prepare_default_workspace
+from .storage import (
+    ImportedProject,
+    ProjectWorkspace,
+    VocabularyStore,
+    list_imported_projects,
+    open_imported_project,
+    prepare_default_workspace,
+)
 from .tts import AudioService, KokoroOnnxEngine, TtsConfig
 
 
@@ -88,6 +97,9 @@ QLineEdit, QComboBox, QDoubleSpinBox, QTextEdit { background: #fffdfc; border: 1
     border-radius: 9px; padding: 7px 9px; selection-background-color: #f4c6c0; }
 QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus, QTextEdit:focus { border: 1px solid #dc908f; }
 QCheckBox { spacing: 7px; color: #6d5e6b; }
+QListWidget { background: #fffdfc; border: 1px solid #eadde5; border-radius: 12px; outline: none; }
+QListWidget::item { padding: 11px 12px; border-bottom: 1px solid #f0e7ec; }
+QListWidget::item:selected { color: #493d49; background: #ffe9e2; }
 QTableWidget { background: #fffefd; alternate-background-color: #fffaf7; border: none;
     gridline-color: #f0e7ec; selection-background-color: #ffe9e2; selection-color: #493d49; }
 QHeaderView::section { color: #675568; background: #f8eff5; border: none;
@@ -301,6 +313,74 @@ class EntryEditDialog(QDialog):
         layout.addRow(buttons)
 
 
+class VocabularyChoiceDialog(QDialog):
+    def __init__(self, projects: list[ImportedProject], parent: QWidget | None = None):
+        super().__init__(parent)
+        self.projects = projects
+        self.import_new_requested = False
+        self.setWindowTitle("选择词汇")
+        self.resize(650, 430)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+
+        title = QLabel("选择一份已经导入的词汇")
+        title.setObjectName("heroTitle")
+        title.setStyleSheet("font-size: 20px;")
+        intro = QLabel("打开后直接使用已有词条和音频；也可以继续导入新的 PDF。")
+        intro.setObjectName("muted")
+        layout.addWidget(title)
+        layout.addWidget(intro)
+
+        self.project_list = QListWidget()
+        self.project_list.setWordWrap(True)
+        self.project_list.setSpacing(2)
+        for index, project in enumerate(projects):
+            item = QListWidgetItem(
+                f"{project.display_name}\n"
+                f"{project.entry_count} 个词 · {project.page_count} 页 · "
+                f"已有音频 {project.audio_ready_count}"
+            )
+            item.setData(Qt.UserRole, index)
+            self.project_list.addItem(item)
+        if projects:
+            self.project_list.setCurrentRow(0)
+        self.project_list.itemDoubleClicked.connect(lambda *_: self._open_selected())
+        layout.addWidget(self.project_list, 1)
+
+        actions = QHBoxLayout()
+        self.import_button = QPushButton("导入新 PDF")
+        self.import_button.setProperty("kind", "mint")
+        self.import_button.clicked.connect(self._request_import)
+        cancel_button = QPushButton("取消")
+        cancel_button.clicked.connect(self.reject)
+        self.open_button = QPushButton("打开所选")
+        self.open_button.setProperty("kind", "primary")
+        self.open_button.setEnabled(bool(projects))
+        self.open_button.clicked.connect(self._open_selected)
+        actions.addWidget(self.import_button)
+        actions.addStretch()
+        actions.addWidget(cancel_button)
+        actions.addWidget(self.open_button)
+        layout.addLayout(actions)
+
+    @property
+    def selected_project(self) -> ImportedProject | None:
+        item = self.project_list.currentItem()
+        if item is None:
+            return None
+        index = int(item.data(Qt.UserRole))
+        return self.projects[index] if 0 <= index < len(self.projects) else None
+
+    def _request_import(self) -> None:
+        self.import_new_requested = True
+        self.accept()
+
+    def _open_selected(self) -> None:
+        if self.selected_project is not None:
+            self.accept()
+
+
 class WordVoiceWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -396,7 +476,7 @@ class WordVoiceWindow(QMainWindow):
         hero_copy.addWidget(badge, 0, Qt.AlignLeft)
         title = QLabel("把单词，变成会说话的小伙伴")
         title.setObjectName("heroTitle")
-        subtitle = QLabel("导入词汇 PDF · 温柔试听 · 生成音频 · 导出 Anki")
+        subtitle = QLabel("选择词汇 · 温柔试听 · 生成音频 · 导出 Anki")
         subtitle.setObjectName("heroSubtitle")
         hero_copy.addWidget(title)
         hero_copy.addWidget(subtitle)
@@ -426,10 +506,10 @@ class WordVoiceWindow(QMainWindow):
         self.sticker_label.setFixedSize(154, 88)
         self.sticker_label.setAlignment(Qt.AlignCenter)
         hero_side.addWidget(self.sticker_label, 0, Qt.AlignCenter)
-        self.choose_button = QPushButton("导入词汇 PDF")
+        self.choose_button = QPushButton("选择词汇")
         self.choose_button.setProperty("kind", "primary")
         self.choose_button.setFixedSize(154, 34)
-        self.choose_button.clicked.connect(self.choose_pdf)
+        self.choose_button.clicked.connect(self.choose_vocabulary)
         hero_side.addWidget(self.choose_button, 0, Qt.AlignCenter)
         hero_layout.addLayout(hero_side)
         self._set_sticker()
@@ -444,7 +524,7 @@ class WordVoiceWindow(QMainWindow):
         summary_title.setObjectName("sectionTitle")
         self.summary_label = QLabel("还没有选择词汇 PDF")
         self.summary_label.setObjectName("documentTitle")
-        self.summary_meta = QLabel("导入后会在这里整理页数、词条和已完成音频")
+        self.summary_meta = QLabel("点击右上角“选择词汇”，打开已有内容或导入新的 PDF")
         self.summary_meta.setObjectName("documentMeta")
         summary_copy.addWidget(summary_title)
         summary_copy.addWidget(self.summary_label)
@@ -581,7 +661,7 @@ class WordVoiceWindow(QMainWindow):
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setTextVisible(False)
-        self.status_label = QLabel("准备好啦，先导入一份词汇 PDF 吧")
+        self.status_label = QLabel("准备好啦，点击右上角选择词汇吧")
         self.status_label.setObjectName("muted")
         footer_layout.addWidget(status_mark)
         footer_layout.addWidget(self.progress, 1)
@@ -612,11 +692,46 @@ class WordVoiceWindow(QMainWindow):
             self._threads.remove(thread)
 
     @Slot()
-    def choose_pdf(self) -> None:
+    def choose_vocabulary(self) -> None:
+        projects = list_imported_projects()
+        if not projects:
+            QMessageBox.information(
+                self,
+                "还没有词汇文档",
+                "目前没有已经导入的词汇，请选择一个 PDF 开始导入。",
+            )
+            self.import_new_pdf()
+            return
+        dialog = VocabularyChoiceDialog(projects, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        if dialog.import_new_requested:
+            self.import_new_pdf()
+            return
+        project = dialog.selected_project
+        if project is not None:
+            self.load_imported_project(project)
+
+    def import_new_pdf(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "选择英语词汇 PDF", "", "PDF (*.pdf)")
         if not path:
             return
         self.load_pdf(Path(path))
+
+    def load_imported_project(self, project: ImportedProject) -> None:
+        self.choose_button.setEnabled(False)
+        self.summary_label.setText(project.display_name)
+        self.summary_meta.setText("正在载入已导入的词汇…")
+        self.status_label.setText("正在载入已导入的词汇…")
+        self.progress.setValue(0)
+        try:
+            document, workspace, store = open_imported_project(project)
+            self._activate_document(document, workspace, store)
+            self.status_label.setText("已载入已导入的词汇")
+        except Exception as exc:
+            self.choose_button.setEnabled(True)
+            self.progress.setValue(0)
+            self._show_error(f"无法打开这份词汇：{exc}")
 
     def load_pdf(self, pdf_path: Path) -> None:
         if not pdf_path.is_file():
@@ -641,15 +756,19 @@ class WordVoiceWindow(QMainWindow):
 
     @Slot(object, object, object, object)
     def _on_document(self, document, workspace, store, migration) -> None:
-        self.document = document
-        self.workspace = workspace
-        self.store = store
-        self.choose_button.setEnabled(True)
-        self._refresh_summary()
+        self._activate_document(document, workspace, store)
         if migration.performed:
             self.status_label.setText(f"已从 v0.1 复制 {migration.copied_audio} 条音频到 v0.2")
         else:
             self.status_label.setText("文档分析完成")
+
+    def _activate_document(self, document, workspace, store) -> None:
+        self.document = document
+        self.pdf_path = document.source_path
+        self.workspace = workspace
+        self.store = store
+        self.choose_button.setEnabled(True)
+        self._refresh_summary()
         self.progress.setValue(100)
         self.refresh_table()
 
@@ -890,12 +1009,6 @@ def main() -> int:
     window.showNormal()
     window.raise_()
     window.activateWindow()
-    pdf_argument = next(
-        (Path(argument) for argument in sys.argv[1:] if argument.lower().endswith(".pdf")),
-        None,
-    )
-    if pdf_argument is not None:
-        QTimer.singleShot(0, lambda path=pdf_argument: window.load_pdf(path))
     return application.exec()
 
 

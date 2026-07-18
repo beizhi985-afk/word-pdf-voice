@@ -37,6 +37,22 @@ class WorkspaceMigration:
     source_root: Path | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ImportedProject:
+    workspace: ProjectWorkspace
+    source_path: Path
+    source_hash: str
+    page_count: int
+    entry_count: int
+    flagged_count: int
+    audio_ready_count: int
+    modified_at: float
+
+    @property
+    def display_name(self) -> str:
+        return self.source_path.name or self.workspace.root.name
+
+
 def _local_data_base() -> Path:
     local_app_data = os.environ.get("LOCALAPPDATA")
     return Path(local_app_data) if local_app_data else Path.home() / ".word-pdf-voice"
@@ -49,11 +65,73 @@ def _safe_project_name(pdf_path: str | Path) -> str:
 
 
 def default_workspace_root(pdf_path: str | Path) -> Path:
-    return _local_data_base() / "WordPdfVoice" / "v0.2" / "projects" / _safe_project_name(pdf_path)
+    return imported_projects_root() / _safe_project_name(pdf_path)
+
+
+def imported_projects_root() -> Path:
+    return _local_data_base() / "WordPdfVoice" / "v0.2" / "projects"
 
 
 def legacy_workspace_root(pdf_path: str | Path) -> Path:
     return _local_data_base() / "WordPdfVoice" / "projects" / _safe_project_name(pdf_path)
+
+
+def list_imported_projects(projects_root: str | Path | None = None) -> list[ImportedProject]:
+    root = Path(projects_root).expanduser().resolve() if projects_root else imported_projects_root()
+    if not root.is_dir():
+        return []
+
+    projects: list[ImportedProject] = []
+    for database_path in root.glob("*/project.sqlite3"):
+        try:
+            with closing(sqlite3.connect(database_path)) as connection:
+                metadata = dict(connection.execute("SELECT key, value FROM metadata").fetchall())
+                counts = connection.execute(
+                    """
+                    SELECT
+                        COUNT(*),
+                        SUM(CASE WHEN flags_json <> '[]' THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN audio_status = 'ready' THEN 1 ELSE 0 END),
+                        COALESCE(MAX(page), 0)
+                    FROM entries
+                    """
+                ).fetchone()
+            entry_count = int(counts[0] or 0)
+            if entry_count == 0:
+                continue
+            workspace = ProjectWorkspace.create(database_path.parent)
+            source_value = metadata.get("source_path", "")
+            source_path = Path(source_value) if source_value else Path(workspace.root.name)
+            projects.append(
+                ImportedProject(
+                    workspace=workspace,
+                    source_path=source_path,
+                    source_hash=metadata.get("source_hash", ""),
+                    page_count=int(metadata.get("page_count", "0") or counts[3] or 0),
+                    entry_count=entry_count,
+                    flagged_count=int(counts[1] or 0),
+                    audio_ready_count=int(counts[2] or 0),
+                    modified_at=database_path.stat().st_mtime,
+                )
+            )
+        except (OSError, sqlite3.Error, ValueError):
+            continue
+    return sorted(projects, key=lambda project: (-project.modified_at, project.display_name.lower()))
+
+
+def open_imported_project(
+    project: ImportedProject,
+) -> tuple[ExtractedDocument, ProjectWorkspace, "VocabularyStore"]:
+    workspace = ProjectWorkspace.create(project.workspace.root)
+    store = VocabularyStore(workspace.database_path)
+    document = ExtractedDocument(
+        source_path=project.source_path,
+        source_hash=project.source_hash,
+        page_count=project.page_count,
+        entries=store.list_entries(),
+        issues=[],
+    )
+    return document, workspace, store
 
 
 def prepare_default_workspace(

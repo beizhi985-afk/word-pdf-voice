@@ -10,7 +10,9 @@ from word_voice.samples import select_pronunciation_samples
 from word_voice.storage import (
     ProjectWorkspace,
     VocabularyStore,
+    list_imported_projects,
     migrate_legacy_workspace,
+    open_imported_project,
 )
 from word_voice.tts import AudioService, audio_filename
 
@@ -93,6 +95,36 @@ class AudioProfileCacheTests(unittest.TestCase):
 
 
 class StorageTests(unittest.TestCase):
+    def test_imported_projects_can_be_discovered_and_opened_without_source_pdf(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            projects_root = Path(directory) / "projects"
+            workspace = ProjectWorkspace.create(projects_root / "saved-words")
+            store = VocabularyStore(workspace.database_path)
+            document = ExtractedDocument(
+                source_path=Path(directory) / "missing-source.pdf",
+                source_hash="saved-hash",
+                page_count=3,
+                entries=[entry(1, "ready"), entry(2, "flagged", ("missing_phonetic",))],
+                issues=[],
+            )
+            store.import_document(document)
+            audio = workspace.audio_dir / "ready.wav"
+            audio.write_bytes(b"audio")
+            store.mark_audio_ready(1, audio)
+
+            projects = list_imported_projects(projects_root)
+
+            self.assertEqual(1, len(projects))
+            project = projects[0]
+            self.assertEqual("missing-source.pdf", project.display_name)
+            self.assertEqual(2, project.entry_count)
+            self.assertEqual(1, project.flagged_count)
+            self.assertEqual(1, project.audio_ready_count)
+            loaded_document, loaded_workspace, loaded_store = open_imported_project(project)
+            self.assertEqual([1, 2], [item.sequence for item in loaded_document.entries])
+            self.assertEqual(workspace.root, loaded_workspace.root)
+            self.assertEqual("ready", loaded_store.get_entry(1).word)
+
     def test_manual_edits_survive_reimport(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = VocabularyStore(Path(directory) / "test.sqlite3")

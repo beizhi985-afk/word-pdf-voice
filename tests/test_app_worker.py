@@ -7,15 +7,16 @@ import time
 import unittest
 import weakref
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QObject, QEventLoop, QThread, QTimer, Signal, Slot
-from PySide6.QtWidgets import QApplication, QPushButton
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QPushButton
 
 from word_voice.app import HEALING_PHRASES, UI_STICKERS, WordVoiceWindow, choose_rotating_value
 from word_voice.models import ExtractedDocument, VocabularyEntry
-from word_voice.storage import VocabularyStore
+from word_voice.storage import ProjectWorkspace, VocabularyStore, list_imported_projects
 
 
 class FinishingWorker(QObject):
@@ -57,10 +58,12 @@ class WorkerLifetimeTests(unittest.TestCase):
         self.assertFalse(window._active_workers)
         window.close()
 
-    def test_v031_healing_controls_and_assets_are_visible(self) -> None:
+    def test_v032_healing_controls_and_assets_are_visible(self) -> None:
         window = WordVoiceWindow()
         labels = {button.text() for button in window.findChildren(QPushButton)}
-        self.assertEqual("单词文档配音 v0.3.1", window.windowTitle())
+        self.assertEqual("单词文档配音 v0.3.2", window.windowTitle())
+        self.assertEqual("选择词汇", window.choose_button.text())
+        self.assertEqual("还没有选择词汇 PDF", window.summary_label.text())
         self.assertEqual("只看已有音频", window.audio_ready_only.text())
         self.assertEqual("af_sarah", window.voice.currentData())
         self.assertEqual("序号从小到大", window.sort_order.currentText())
@@ -74,6 +77,46 @@ class WorkerLifetimeTests(unittest.TestCase):
         self.assertIn("导出已有音频", labels)
         self.assertIn("导出全部 Anki", labels)
         window.close()
+
+    def test_no_imported_project_prompts_for_a_new_pdf_without_starting_analysis(self) -> None:
+        window = WordVoiceWindow()
+        with (
+            patch("word_voice.app.list_imported_projects", return_value=[]),
+            patch.object(QMessageBox, "information") as information,
+            patch.object(QFileDialog, "getOpenFileName", return_value=("", "")) as picker,
+        ):
+            window.choose_vocabulary()
+
+        information.assert_called_once()
+        picker.assert_called_once()
+        self.assertIsNone(window.document)
+        self.assertIsNone(window.store)
+        window.close()
+
+    def test_existing_import_can_be_selected_without_reanalyzing_the_pdf(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            projects_root = Path(directory) / "projects"
+            workspace = ProjectWorkspace.create(projects_root / "saved")
+            store = VocabularyStore(workspace.database_path)
+            store.import_document(
+                ExtractedDocument(
+                    Path(directory) / "no-longer-present.pdf",
+                    "cached",
+                    1,
+                    [VocabularyEntry(1, "cached", "", "已缓存", 1)],
+                    [],
+                )
+            )
+            project = list_imported_projects(projects_root)[0]
+            window = WordVoiceWindow()
+
+            window.load_imported_project(project)
+
+            self.assertEqual("no-longer-present.pdf", window.summary_label.text())
+            self.assertEqual(1, window.table.rowCount())
+            self.assertEqual("cached", window.table.item(0, 1).text())
+            self.assertEqual("已载入已导入的词汇", window.status_label.text())
+            window.close()
 
     def test_rotating_value_avoids_immediate_repeat(self) -> None:
         selected = choose_rotating_value(("first", "second"), "first", lambda values: values[0])
