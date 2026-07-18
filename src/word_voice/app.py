@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import os
+import random
 import sys
 import threading
 import traceback
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtCore import QObject, QSettings, QThread, QTimer, Qt, Signal, Slot
+from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -18,6 +19,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -26,6 +28,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
@@ -43,31 +46,108 @@ from .tts import AudioService, KokoroOnnxEngine, TtsConfig
 
 
 APP_STYLE = """
-QWidget { background: #eef2f7; color: #17233c; font-family: "Microsoft YaHei UI"; font-size: 13px; }
-QFrame#card { background: white; border: 1px solid #dbe3ee; border-radius: 10px; }
-QLabel#title { font-size: 27px; font-weight: 700; }
-QLabel#subtitle, QLabel#muted { color: #66758b; }
-QPushButton { background: white; border: 1px solid #c8d2e1; border-radius: 7px; padding: 8px 14px; }
-QPushButton:hover { background: #f7f9fc; border-color: #9fb0c7; }
-QPushButton#primary { background: #2457c5; color: white; border: none; font-weight: 700; }
-QPushButton#primary:hover { background: #173f96; }
-QLineEdit, QComboBox, QDoubleSpinBox, QTextEdit { background: white; border: 1px solid #c8d2e1;
-    border-radius: 6px; padding: 6px; }
-QTableWidget { background: white; alternate-background-color: #f8fafc; border: none;
-    gridline-color: #e5eaf1; selection-background-color: #dce8ff; selection-color: #17233c; }
-QHeaderView::section { background: #f1f5f9; border: none; border-bottom: 1px solid #dbe3ee;
-    padding: 8px; font-weight: 700; }
-QProgressBar { background: #dbe3ee; border: none; border-radius: 5px; height: 10px; text-align: center; }
-QProgressBar::chunk { background: #2457c5; border-radius: 5px; }
+QWidget { color: #4b4052; font-family: "Microsoft YaHei UI"; font-size: 13px; }
+QWidget#page { background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+    stop:0 #fff8f2, stop:0.48 #fffdf9, stop:1 #f8f1ff); }
+QLabel { background: transparent; }
+QFrame#heroCard { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+    stop:0 #fff0e7, stop:0.55 #fff7ed, stop:1 #f2eaff);
+    border: 1px solid #efd9d5; border-radius: 24px; }
+QFrame#card, QFrame#summaryCard, QFrame#tableCard, QFrame#statusCard {
+    background: rgba(255, 255, 255, 238); border: 1px solid #eadfe7; border-radius: 17px; }
+QFrame#phraseBubble { background: rgba(255, 255, 255, 205); border: 1px solid #f2d8cf;
+    border-radius: 13px; }
+QFrame#metricCoral { background: #fff0e8; border: 1px solid #f6d4c5; border-radius: 12px; }
+QFrame#metricLilac { background: #f4eeff; border: 1px solid #ddd0f4; border-radius: 12px; }
+QFrame#metricMint { background: #ecf8f1; border: 1px solid #cce9d9; border-radius: 12px; }
+QFrame#metricSun { background: #fff8df; border: 1px solid #f1dfaa; border-radius: 12px; }
+QLabel#eyebrow { color: #a65f78; background: #fff9f5; border: 1px solid #f1d8d0;
+    border-radius: 10px; padding: 4px 10px; font-size: 11px; font-weight: 700; }
+QLabel#heroTitle { color: #493949; font-size: 28px; font-weight: 800; }
+QLabel#heroSubtitle { color: #806e7c; font-size: 13px; }
+QLabel#phraseMark { color: #e88379; font-size: 18px; font-weight: 800; }
+QLabel#phraseText { color: #6d5668; font-size: 13px; font-weight: 600; }
+QLabel#sectionTitle { color: #574657; font-size: 15px; font-weight: 800; }
+QLabel#documentTitle { color: #514351; font-size: 14px; font-weight: 700; }
+QLabel#muted, QLabel#documentMeta, QLabel#tableCount { color: #8a7887; }
+QLabel#metricValue { color: #4f414f; font-size: 18px; font-weight: 800; }
+QLabel#metricLabel { color: #8b7987; font-size: 11px; }
+QPushButton { background: #fffdfc; border: 1px solid #dfd0d9; border-radius: 10px;
+    padding: 8px 13px; font-weight: 600; }
+QPushButton:hover { background: #fff4ef; border-color: #d8aeb8; }
+QPushButton:pressed { background: #f8e8e4; }
+QPushButton:disabled { color: #b8aeb5; background: #f5f1f3; border-color: #e8e1e5; }
+QPushButton[kind="primary"] { color: white; background: #e9837e; border: none; font-weight: 800; }
+QPushButton[kind="primary"]:hover { background: #d97170; }
+QPushButton[kind="lavender"] { color: #654f83; background: #f1e9ff; border-color: #d7c6ef; }
+QPushButton[kind="lavender"]:hover { background: #e8dcfa; }
+QPushButton[kind="mint"] { color: #46735f; background: #eaf7ef; border-color: #c6e4d2; }
+QPushButton[kind="sun"] { color: #826a32; background: #fff6d9; border-color: #ecd998; }
+QPushButton[kind="ghost"] { color: #a16f81; background: transparent; border: none; padding: 4px 7px; }
+QLineEdit, QComboBox, QDoubleSpinBox, QTextEdit { background: #fffdfc; border: 1px solid #dfd1da;
+    border-radius: 9px; padding: 7px 9px; selection-background-color: #f4c6c0; }
+QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus, QTextEdit:focus { border: 1px solid #dc908f; }
+QCheckBox { spacing: 7px; color: #6d5e6b; }
+QTableWidget { background: #fffefd; alternate-background-color: #fffaf7; border: none;
+    gridline-color: #f0e7ec; selection-background-color: #ffe9e2; selection-color: #493d49; }
+QHeaderView::section { color: #675568; background: #f8eff5; border: none;
+    border-bottom: 1px solid #e7d9e2; padding: 9px; font-weight: 800; }
+QProgressBar { background: #eee5eb; border: none; border-radius: 5px; height: 9px; text-align: center; }
+QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+    stop:0 #ee978c, stop:1 #b79add); border-radius: 5px; }
 """
 
 
-def bundled_model_paths() -> tuple[Path, Path] | None:
-    candidates_root: list[Path] = []
+HEALING_PHRASES = (
+    "慢一点也没关系，你正在把陌生变成熟悉。",
+    "今天记住一个词，也是在悄悄靠近更大的世界。",
+    "每一次认真听读，都会在未来给你一个温柔的回声。",
+    "不必一下子很厉害，保持前进就已经很了不起。",
+    "把今天的小进步收好，它会在某天变成自信。",
+    "学累了就休息一下，回来时我们继续并肩前进。",
+    "你读过的每一个单词，都在为新的可能铺路。",
+    "允许自己慢慢来，语言本来就是一场温柔的相遇。",
+    "今天也给努力学习的自己一个小小的拥抱。",
+    "听见一个词，理解一个词，世界就亮起一点点。",
+    "不用和别人比，你只需要比昨天多会一点点。",
+    "愿你在一个个单词里，遇见更辽阔的自己。",
+)
+
+UI_STICKERS = (
+    "chibi-student.png",
+    "headphone-dino.png",
+    "cozy-cloud-cat.png",
+)
+
+
+def choose_rotating_value(
+    values: tuple[str, ...],
+    previous: str = "",
+    chooser=None,
+) -> str:
+    candidates = tuple(value for value in values if value != previous) or values
+    select = chooser or random.SystemRandom().choice
+    return select(candidates)
+
+
+def _resource_roots() -> list[Path]:
+    roots: list[Path] = []
     if getattr(sys, "frozen", False):
-        candidates_root.append(Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)))
-        candidates_root.append(Path(sys.executable).resolve().parent)
-    candidates_root.append(Path(__file__).resolve().parents[2])
+        roots.append(Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)))
+        roots.append(Path(sys.executable).resolve().parent)
+    roots.append(Path(__file__).resolve().parents[2])
+    return roots
+
+
+def bundled_ui_asset_path(filename: str) -> Path | None:
+    return next(
+        (root / "assets" / "ui" / filename for root in _resource_roots() if (root / "assets" / "ui" / filename).is_file()),
+        None,
+    )
+
+
+def bundled_model_paths() -> tuple[Path, Path] | None:
+    candidates_root = _resource_roots()
     model_dir = next(
         (root / "models" for root in candidates_root if (root / "models").is_dir()),
         candidates_root[0] / "models",
@@ -131,7 +211,7 @@ class ExtractionWorker(QObject):
                     current, total, f"正在分析第 {current}/{total} 页"
                 ),
             )
-            self.progress.emit(0, 0, "正在准备 v0.2 项目数据...")
+            self.progress.emit(0, 0, "正在准备项目数据...")
             workspace, migration = prepare_default_workspace(self.pdf_path)
             store = VocabularyStore(workspace.database_path)
             store.import_document(document)
@@ -221,8 +301,9 @@ class WordVoiceWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"单词文档配音 v{__version__}")
-        self.resize(1180, 780)
-        self.setMinimumSize(980, 640)
+        # Keep the first launch usable on 1280×800 displays running at 125% scaling.
+        self.resize(1000, 680)
+        self.setMinimumSize(900, 600)
         self.pdf_path: Path | None = None
         self.document = None
         self.workspace: ProjectWorkspace | None = None
@@ -230,60 +311,176 @@ class WordVoiceWindow(QMainWindow):
         self.stop_event = threading.Event()
         self._threads: list[QThread] = []
         self._active_workers: dict[QThread, QObject] = {}
+        self._settings = QSettings("WordPdfVoice", "WordPdfVoice")
+        self.opening_phrase = choose_rotating_value(
+            HEALING_PHRASES, str(self._settings.value("ui/last_phrase", ""))
+        )
+        self.sticker_name = choose_rotating_value(
+            UI_STICKERS, str(self._settings.value("ui/last_sticker", ""))
+        )
+        self._settings.setValue("ui/last_phrase", self.opening_phrase)
+        self._settings.setValue("ui/last_sticker", self.sticker_name)
         self._build_ui()
 
-    def _card(self) -> QFrame:
+    def _card(self, object_name: str = "card", shadow: bool = False) -> QFrame:
         frame = QFrame()
-        frame.setObjectName("card")
+        frame.setObjectName(object_name)
+        if shadow:
+            effect = QGraphicsDropShadowEffect(frame)
+            effect.setBlurRadius(28)
+            effect.setOffset(0, 7)
+            effect.setColor(QColor(105, 75, 100, 35))
+            frame.setGraphicsEffect(effect)
         return frame
+
+    def _metric_chip(self, title: str, object_name: str) -> tuple[QFrame, QLabel]:
+        frame = self._card(object_name)
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(14, 7, 14, 7)
+        layout.setSpacing(0)
+        value = QLabel("--")
+        value.setObjectName("metricValue")
+        value.setAlignment(Qt.AlignCenter)
+        label = QLabel(title)
+        label.setObjectName("metricLabel")
+        label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(value)
+        layout.addWidget(label)
+        return frame, value
+
+    def _set_sticker(self) -> None:
+        path = bundled_ui_asset_path(self.sticker_name)
+        if path is None:
+            self.sticker_label.setText("✦")
+            return
+        pixmap = QPixmap(str(path))
+        self.sticker_label.setPixmap(
+            pixmap.scaled(
+                self.sticker_label.size(),
+                Qt.KeepAspectRatio,
+                Qt.SmoothTransformation,
+            )
+        )
+        if self.windowIcon().isNull():
+            self.setWindowIcon(QIcon(str(path)))
+
+    @Slot()
+    def rotate_phrase(self) -> None:
+        self.opening_phrase = choose_rotating_value(HEALING_PHRASES, self.opening_phrase)
+        self._settings.setValue("ui/last_phrase", self.opening_phrase)
+        self.phrase_label.setText(self.opening_phrase)
 
     def _build_ui(self) -> None:
         central = QWidget()
+        central.setObjectName("page")
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(24, 18, 24, 18)
-        root.setSpacing(10)
+        root.setContentsMargins(22, 18, 22, 18)
+        root.setSpacing(11)
 
-        header = QHBoxLayout()
-        title = QLabel("单词文档配音")
-        title.setObjectName("title")
-        subtitle = QLabel("英文词汇 PDF → 逐词播放 → Anki")
-        subtitle.setObjectName("subtitle")
-        header.addWidget(title)
-        header.addWidget(subtitle)
-        header.addStretch()
-        self.choose_button = QPushButton("选择 PDF")
-        self.choose_button.setObjectName("primary")
+        hero = self._card("heroCard", shadow=True)
+        hero.setFixedHeight(160)
+        hero_layout = QHBoxLayout(hero)
+        hero_layout.setContentsMargins(24, 15, 20, 15)
+        hero_layout.setSpacing(16)
+        hero_copy = QVBoxLayout()
+        hero_copy.setSpacing(5)
+        badge = QLabel(f"VOCAB VOICE · v{__version__}")
+        badge.setObjectName("eyebrow")
+        badge.setMaximumWidth(158)
+        hero_copy.addWidget(badge, 0, Qt.AlignLeft)
+        title = QLabel("把单词，变成会说话的小伙伴")
+        title.setObjectName("heroTitle")
+        subtitle = QLabel("导入词汇 PDF · 温柔试听 · 生成音频 · 导出 Anki")
+        subtitle.setObjectName("heroSubtitle")
+        hero_copy.addWidget(title)
+        hero_copy.addWidget(subtitle)
+        phrase_bubble = self._card("phraseBubble")
+        phrase_layout = QHBoxLayout(phrase_bubble)
+        phrase_layout.setContentsMargins(11, 5, 8, 5)
+        phrase_layout.setSpacing(7)
+        phrase_mark = QLabel("♡")
+        phrase_mark.setObjectName("phraseMark")
+        self.phrase_label = QLabel(self.opening_phrase)
+        self.phrase_label.setObjectName("phraseText")
+        self.phrase_label.setMinimumWidth(0)
+        self.phrase_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.phrase_button = QPushButton("换一句")
+        self.phrase_button.setProperty("kind", "ghost")
+        self.phrase_button.clicked.connect(self.rotate_phrase)
+        phrase_layout.addWidget(phrase_mark)
+        phrase_layout.addWidget(self.phrase_label, 1)
+        phrase_layout.addWidget(self.phrase_button)
+        hero_copy.addWidget(phrase_bubble)
+        hero_layout.addLayout(hero_copy, 1)
+
+        hero_side = QVBoxLayout()
+        hero_side.setSpacing(3)
+        hero_side.setAlignment(Qt.AlignCenter)
+        self.sticker_label = QLabel()
+        self.sticker_label.setFixedSize(154, 88)
+        self.sticker_label.setAlignment(Qt.AlignCenter)
+        hero_side.addWidget(self.sticker_label, 0, Qt.AlignCenter)
+        self.choose_button = QPushButton("导入词汇 PDF")
+        self.choose_button.setProperty("kind", "primary")
+        self.choose_button.setFixedSize(154, 34)
         self.choose_button.clicked.connect(self.choose_pdf)
-        header.addWidget(self.choose_button)
-        root.addLayout(header)
+        hero_side.addWidget(self.choose_button, 0, Qt.AlignCenter)
+        hero_layout.addLayout(hero_side)
+        self._set_sticker()
+        root.addWidget(hero)
 
-        summary_card = self._card()
-        summary_layout = QVBoxLayout(summary_card)
-        summary_title = QLabel("当前文档")
-        summary_title.setFont(QFont("Microsoft YaHei UI", 11, QFont.Bold))
-        self.summary_label = QLabel("尚未导入文档")
-        self.summary_label.setObjectName("muted")
-        summary_layout.addWidget(summary_title)
-        summary_layout.addWidget(self.summary_label)
+        summary_card = self._card("summaryCard")
+        summary_layout = QHBoxLayout(summary_card)
+        summary_layout.setContentsMargins(17, 9, 14, 9)
+        summary_copy = QVBoxLayout()
+        summary_copy.setSpacing(2)
+        summary_title = QLabel("当前学习文档")
+        summary_title.setObjectName("sectionTitle")
+        self.summary_label = QLabel("还没有选择词汇 PDF")
+        self.summary_label.setObjectName("documentTitle")
+        self.summary_meta = QLabel("导入后会在这里整理页数、词条和已完成音频")
+        self.summary_meta.setObjectName("documentMeta")
+        summary_copy.addWidget(summary_title)
+        summary_copy.addWidget(self.summary_label)
+        summary_copy.addWidget(self.summary_meta)
+        summary_layout.addLayout(summary_copy, 1)
+        page_chip, self.page_metric = self._metric_chip("页数", "metricLilac")
+        entry_chip, self.entry_metric = self._metric_chip("词条", "metricCoral")
+        issue_chip, self.issue_metric = self._metric_chip("需留意", "metricSun")
+        audio_chip, self.audio_metric = self._metric_chip("已有音频", "metricMint")
+        for chip in (page_chip, entry_chip, issue_chip, audio_chip):
+            chip.setMinimumWidth(82)
+            summary_layout.addWidget(chip)
         root.addWidget(summary_card)
 
         toolbar_card = self._card()
-        toolbar = QHBoxLayout(toolbar_card)
-        toolbar.addWidget(QLabel("搜索"))
+        toolbar = QVBoxLayout(toolbar_card)
+        toolbar.setContentsMargins(14, 8, 14, 8)
+        toolbar.setSpacing(6)
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(8)
+        search_label = QLabel("搜索")
+        search_label.setObjectName("sectionTitle")
+        filter_row.addWidget(search_label)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("单词、注音或释义")
-        self.search.setMaximumWidth(280)
+        self.search.setPlaceholderText("输入单词、音标或释义…")
+        self.search.setMinimumWidth(220)
+        self.search.setMaximumWidth(480)
         self.search.textChanged.connect(self.refresh_table)
-        toolbar.addWidget(self.search)
+        filter_row.addWidget(self.search, 1)
         self.issues_only = QCheckBox("只看异常")
         self.issues_only.toggled.connect(self.refresh_table)
-        toolbar.addWidget(self.issues_only)
+        filter_row.addWidget(self.issues_only)
         self.audio_ready_only = QCheckBox("只看已有音频")
         self.audio_ready_only.toggled.connect(self.refresh_table)
-        toolbar.addWidget(self.audio_ready_only)
-        toolbar.addSpacing(10)
-        toolbar.addWidget(QLabel("声音"))
+        filter_row.addWidget(self.audio_ready_only)
+        filter_row.addStretch()
+        toolbar.addLayout(filter_row)
+
+        settings_row = QHBoxLayout()
+        settings_row.setSpacing(8)
+        settings_row.addWidget(QLabel("声音"))
         self.voice = QComboBox()
         for label, voice_id in (
             ("美式女声 · Sarah", "af_sarah"),
@@ -293,8 +490,9 @@ class WordVoiceWindow(QMainWindow):
         ):
             self.voice.addItem(label, voice_id)
         self.voice.setToolTip("更换声音后，下次试听或生成会重新制作对应音频")
-        toolbar.addWidget(self.voice)
-        toolbar.addWidget(QLabel("语速"))
+        settings_row.addWidget(self.voice)
+        settings_row.addSpacing(12)
+        settings_row.addWidget(QLabel("语速"))
         self.speed = QDoubleSpinBox()
         self.speed.setRange(0.6, 1.3)
         self.speed.setSingleStep(0.1)
@@ -302,18 +500,29 @@ class WordVoiceWindow(QMainWindow):
         self.speed.setSuffix(" 倍")
         self.speed.setValue(0.9)
         self.speed.setToolTip("改变语速后，下次试听或生成会重新制作对应音频")
-        toolbar.addWidget(self.speed)
-        toolbar.addSpacing(10)
-        toolbar.addWidget(QLabel("排序"))
+        settings_row.addWidget(self.speed)
+        settings_row.addSpacing(12)
+        settings_row.addWidget(QLabel("排序"))
         self.sort_order = QComboBox()
         self.sort_order.addItem("序号从小到大", "asc")
         self.sort_order.addItem("序号从大到小", "desc")
-        toolbar.addWidget(self.sort_order)
-        toolbar.addStretch()
+        settings_row.addWidget(self.sort_order)
+        settings_row.addStretch()
+        toolbar.addLayout(settings_row)
         root.addWidget(toolbar_card)
 
-        table_card = self._card()
+        table_card = self._card("tableCard", shadow=True)
         table_layout = QVBoxLayout(table_card)
+        table_layout.setContentsMargins(12, 10, 12, 12)
+        table_heading = QHBoxLayout()
+        table_title = QLabel("词汇小队")
+        table_title.setObjectName("sectionTitle")
+        self.table_count_label = QLabel("显示 0 条")
+        self.table_count_label.setObjectName("tableCount")
+        table_heading.addWidget(table_title)
+        table_heading.addStretch()
+        table_heading.addWidget(self.table_count_label)
+        table_layout.addLayout(table_heading)
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(("序号", "单词", "注音", "释义", "页码", "状态"))
         self.table.setAlternatingRowColors(True)
@@ -321,7 +530,7 @@ class WordVoiceWindow(QMainWindow):
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(30)
+        self.table.verticalHeader().setDefaultSectionSize(34)
         header_view = self.table.horizontalHeader()
         for column in (0, 1, 2, 4, 5):
             header_view.setSectionResizeMode(column, QHeaderView.ResizeToContents)
@@ -331,34 +540,42 @@ class WordVoiceWindow(QMainWindow):
         root.addWidget(table_card, 1)
 
         actions = QHBoxLayout()
-        for label, handler in (
-            ("试听所选", self.play_selected),
-            ("编辑词条", self.edit_selected),
-            ("生成 30 词样本", self.generate_samples),
-            ("生成全部", self.generate_all),
-            ("停止", self.stop_generation),
-            ("打开音频文件夹", self.open_audio_folder),
+        actions.setSpacing(7)
+        for label, handler, kind in (
+            ("试听所选", self.play_selected, "primary"),
+            ("编辑词条", self.edit_selected, ""),
+            ("生成 30 词样本", self.generate_samples, "sun"),
+            ("生成全部", self.generate_all, "lavender"),
+            ("停止", self.stop_generation, ""),
+            ("打开音频文件夹", self.open_audio_folder, ""),
         ):
             button = QPushButton(label)
+            if kind:
+                button.setProperty("kind", kind)
             button.clicked.connect(handler)
             actions.addWidget(button)
         actions.addStretch()
         ready_export_button = QPushButton("导出已有音频")
+        ready_export_button.setProperty("kind", "mint")
         ready_export_button.clicked.connect(self.export_ready_anki)
         actions.addWidget(ready_export_button)
         export_button = QPushButton("导出全部 Anki")
-        export_button.setObjectName("primary")
+        export_button.setProperty("kind", "lavender")
         export_button.clicked.connect(self.export_anki)
         actions.addWidget(export_button)
         root.addLayout(actions)
 
-        footer = self._card()
+        footer = self._card("statusCard")
         footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(13, 8, 13, 8)
+        status_mark = QLabel("♡")
+        status_mark.setObjectName("phraseMark")
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.setTextVisible(False)
-        self.status_label = QLabel("请选择目标 PDF")
+        self.status_label = QLabel("准备好啦，先导入一份词汇 PDF 吧")
         self.status_label.setObjectName("muted")
+        footer_layout.addWidget(status_mark)
         footer_layout.addWidget(self.progress, 1)
         footer_layout.addWidget(self.status_label)
         root.addWidget(footer)
@@ -399,7 +616,8 @@ class WordVoiceWindow(QMainWindow):
             return
         self.pdf_path = pdf_path
         self.choose_button.setEnabled(False)
-        self.summary_label.setText(f"正在分析：{pdf_path.name}")
+        self.summary_label.setText(pdf_path.name)
+        self.summary_meta.setText("正在认识这份词汇，请稍等一下…")
         self.status_label.setText("正在分析文档...")
         self.progress.setValue(0)
         worker = ExtractionWorker(self.pdf_path)
@@ -431,11 +649,12 @@ class WordVoiceWindow(QMainWindow):
         if not self.document or not self.store:
             return
         counts = self.store.audio_counts()
-        self.summary_label.setText(
-            f"{self.document.source_path.name} · {self.document.page_count} 页 · "
-            f"{len(self.document.entries)} 条 · 异常 {self.document.flagged_count} 条 · "
-            f"已有音频 {counts['ready']} 条"
-        )
+        self.summary_label.setText(self.document.source_path.name)
+        self.summary_meta.setText("解析完成，可以搜索、试听、生成或导出学习卡组")
+        self.page_metric.setText(str(self.document.page_count))
+        self.entry_metric.setText(str(len(self.document.entries)))
+        self.issue_metric.setText(str(self.document.flagged_count))
+        self.audio_metric.setText(str(counts["ready"]))
 
     @Slot(str)
     def _on_extraction_error(self, message: str) -> None:
@@ -453,6 +672,7 @@ class WordVoiceWindow(QMainWindow):
             issues_only=self.issues_only.isChecked(),
             audio_ready_only=self.audio_ready_only.isChecked(),
         )
+        self.table_count_label.setText(f"显示 {len(entries)} 条")
         statuses = self.store.audio_status_map()
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(entries))
@@ -659,7 +879,9 @@ def main() -> int:
     application = QApplication.instance() or QApplication(sys.argv)
     application.setStyleSheet(APP_STYLE)
     window = WordVoiceWindow()
-    window.show()
+    window.showNormal()
+    window.raise_()
+    window.activateWindow()
     pdf_argument = next(
         (Path(argument) for argument in sys.argv[1:] if argument.lower().endswith(".pdf")),
         None,

@@ -10,7 +10,7 @@ if (-not (Test-Path -LiteralPath $pythonPath)) {
 & $pythonPath -m pip install "pyinstaller>=6.10,<7"
 & $pythonPath -m PyInstaller --noconfirm --clean (Join-Path $projectRoot "packaging\word_voice.spec")
 
-$result = Join-Path $projectRoot "dist\WordPdfVoice-v0.2.1\WordPdfVoice-v0.2.1.exe"
+$result = Join-Path $projectRoot "dist\WordPdfVoice-v0.3.0\WordPdfVoice-v0.3.0.exe"
 if (-not (Test-Path -LiteralPath $result)) {
     throw "打包失败：未找到 $result"
 }

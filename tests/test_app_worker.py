@@ -13,7 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QObject, QEventLoop, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import QApplication, QPushButton
 
-from word_voice.app import WordVoiceWindow
+from word_voice.app import HEALING_PHRASES, UI_STICKERS, WordVoiceWindow, choose_rotating_value
 from word_voice.models import ExtractedDocument, VocabularyEntry
 from word_voice.storage import VocabularyStore
 
@@ -57,17 +57,25 @@ class WorkerLifetimeTests(unittest.TestCase):
         self.assertFalse(window._active_workers)
         window.close()
 
-    def test_v021_controls_are_visible(self) -> None:
+    def test_v030_healing_controls_and_assets_are_visible(self) -> None:
         window = WordVoiceWindow()
         labels = {button.text() for button in window.findChildren(QPushButton)}
-        self.assertEqual("单词文档配音 v0.2.1", window.windowTitle())
+        self.assertEqual("单词文档配音 v0.3.0", window.windowTitle())
         self.assertEqual("只看已有音频", window.audio_ready_only.text())
         self.assertEqual("af_sarah", window.voice.currentData())
         self.assertEqual("序号从小到大", window.sort_order.currentText())
+        self.assertIn(window.opening_phrase, HEALING_PHRASES)
+        self.assertIn(window.sticker_name, UI_STICKERS)
+        self.assertEqual("换一句", window.phrase_button.text())
+        self.assertFalse(window.sticker_label.pixmap().isNull())
         self.assertIn("打开音频文件夹", labels)
         self.assertIn("导出已有音频", labels)
         self.assertIn("导出全部 Anki", labels)
         window.close()
+
+    def test_rotating_value_avoids_immediate_repeat(self) -> None:
+        selected = choose_rotating_value(("first", "second"), "first", lambda values: values[0])
+        self.assertEqual("second", selected)
 
     def test_sequence_sort_uses_numbers_in_both_directions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

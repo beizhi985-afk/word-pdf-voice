@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import collect_all
 
 
 project_root = Path(SPECPATH).parent
-app_name = "WordPdfVoice-v0.2.1"
+app_name = "WordPdfVoice-v0.3.0"
 datas = []
 binaries = []
 hiddenimports = []
@@ -28,6 +28,10 @@ for filename in ("kokoro-v1.0.int8.onnx", "voices-v1.0.bin"):
     if not model_path.is_file():
         raise FileNotFoundError(f"Missing model file: {model_path}")
     datas.append((str(model_path), "models"))
+
+ui_assets = project_root / "assets" / "ui"
+for asset_path in ui_assets.glob("*.png"):
+    datas.append((str(asset_path), "assets/ui"))
 
 a = Analysis(
     [str(project_root / "scripts" / "run_app.py")],

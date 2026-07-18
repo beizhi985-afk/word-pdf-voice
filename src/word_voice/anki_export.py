@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+from . import __version__
 from .models import VocabularyEntry
 from .storage import VocabularyStore
 
@@ -59,7 +60,7 @@ def export_anki_deck(
 
     model = genanki.Model(
         ANKI_MODEL_ID,
-        "Word PDF Voice v0.2",
+        f"Word PDF Voice v{__version__}",
         fields=[
             {"name": "Sequence"},
             {"name": "Word"},

@@ -26,3 +26,4 @@
 - [v0.1 桌面主流程](v0.1-desktop.md)
 - [v0.2 已生成音频查看与导出](v0.2-generated-audio.md)
 - [v0.2.1 声音、语速与序号排序](v0.2.1-tts-sort.md)
+- [v0.3.0 动漫治愈风主界面](v0.3-anime-healing-ui.md)
