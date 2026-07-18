@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import collect_all
 
 
 project_root = Path(SPECPATH).parent
-app_name = "WordPdfVoice-v0.3.0"
+app_name = "WordPdfVoice-v0.3.1"
 datas = []
 binaries = []
 hiddenimports = []
@@ -32,6 +32,10 @@ for filename in ("kokoro-v1.0.int8.onnx", "voices-v1.0.bin"):
 ui_assets = project_root / "assets" / "ui"
 for asset_path in ui_assets.glob("*.png"):
     datas.append((str(asset_path), "assets/ui"))
+app_icon = ui_assets / "app-icon.ico"
+if not app_icon.is_file():
+    raise FileNotFoundError(f"Missing application icon: {app_icon}")
+datas.append((str(app_icon), "assets/ui"))
 
 a = Analysis(
     [str(project_root / "scripts" / "run_app.py")],
@@ -58,6 +62,7 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,
+    icon=str(app_icon),
 )
 
 coll = COLLECT(

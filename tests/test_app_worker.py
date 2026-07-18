@@ -57,15 +57,17 @@ class WorkerLifetimeTests(unittest.TestCase):
         self.assertFalse(window._active_workers)
         window.close()
 
-    def test_v030_healing_controls_and_assets_are_visible(self) -> None:
+    def test_v031_healing_controls_and_assets_are_visible(self) -> None:
         window = WordVoiceWindow()
         labels = {button.text() for button in window.findChildren(QPushButton)}
-        self.assertEqual("单词文档配音 v0.3.0", window.windowTitle())
+        self.assertEqual("单词文档配音 v0.3.1", window.windowTitle())
         self.assertEqual("只看已有音频", window.audio_ready_only.text())
         self.assertEqual("af_sarah", window.voice.currentData())
         self.assertEqual("序号从小到大", window.sort_order.currentText())
         self.assertIn(window.opening_phrase, HEALING_PHRASES)
         self.assertIn(window.sticker_name, UI_STICKERS)
+        self.assertNotIn("headphone-dino.png", UI_STICKERS)
+        self.assertFalse(window.windowIcon().isNull())
         self.assertEqual("换一句", window.phrase_button.text())
         self.assertFalse(window.sticker_label.pixmap().isNull())
         self.assertIn("打开音频文件夹", labels)
@@ -92,12 +94,19 @@ class WorkerLifetimeTests(unittest.TestCase):
             window.sort_order.setCurrentIndex(1)
             window.refresh_table()
             descending = [int(window.table.item(row, 0).text()) for row in range(3)]
+            descending_widths = tuple(
+                window.table.horizontalHeader().sectionSize(column) for column in range(6)
+            )
             window.sort_order.setCurrentIndex(0)
             window.refresh_table()
             ascending = [int(window.table.item(row, 0).text()) for row in range(3)]
+            ascending_widths = tuple(
+                window.table.horizontalHeader().sectionSize(column) for column in range(6)
+            )
 
             self.assertEqual([10, 2, 1], descending)
             self.assertEqual([1, 2, 10], ascending)
+            self.assertEqual(descending_widths, ascending_widths)
             window.close()
 
 

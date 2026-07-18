@@ -22,14 +22,26 @@ class PackagingRegressionTests(unittest.TestCase):
     def test_build_uses_current_version_name(self) -> None:
         specification = (ROOT / "packaging" / "word_voice.spec").read_text(encoding="utf-8")
         build_script = (ROOT / "scripts" / "build.ps1").read_text(encoding="utf-8")
-        self.assertIn('app_name = "WordPdfVoice-v0.3.0"', specification)
-        self.assertIn("dist\\WordPdfVoice-v0.3.0\\WordPdfVoice-v0.3.0.exe", build_script)
+        self.assertIn('app_name = "WordPdfVoice-v0.3.1"', specification)
+        self.assertIn("dist\\WordPdfVoice-v0.3.1\\WordPdfVoice-v0.3.1.exe", build_script)
 
-    def test_original_ui_stickers_are_transparent_and_packaged(self) -> None:
+    def test_ui_stickers_and_book_icon_are_transparent_and_packaged(self) -> None:
         specification = (ROOT / "packaging" / "word_voice.spec").read_text(encoding="utf-8")
         self.assertIn('ui_assets.glob("*.png")', specification)
         self.assertIn('"assets/ui"', specification)
-        for filename in ("chibi-student.png", "headphone-dino.png", "cozy-cloud-cat.png"):
+        self.assertIn("icon=str(app_icon)", specification)
+        self.assertTrue((ROOT / "assets" / "ui" / "app-icon.ico").is_file())
+        self.assertFalse((ROOT / "assets" / "ui" / "headphone-dino.png").exists())
+        for filename in (
+            "app-icon.png",
+            "crayon-shinnosuke.png",
+            "crayon-kazama.png",
+            "crayon-masao.png",
+            "crayon-bochan.png",
+            "crayon-nene.png",
+            "chibi-student.png",
+            "cozy-cloud-cat.png",
+        ):
             image = QImage(str(ROOT / "assets" / "ui" / filename))
             self.assertFalse(image.isNull(), filename)
             self.assertTrue(image.hasAlphaChannel(), filename)

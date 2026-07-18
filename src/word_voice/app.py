@@ -114,8 +114,12 @@ HEALING_PHRASES = (
 )
 
 UI_STICKERS = (
+    "crayon-shinnosuke.png",
+    "crayon-kazama.png",
+    "crayon-masao.png",
+    "crayon-bochan.png",
+    "crayon-nene.png",
     "chibi-student.png",
-    "headphone-dino.png",
     "cozy-cloud-cat.png",
 )
 
@@ -321,6 +325,9 @@ class WordVoiceWindow(QMainWindow):
         self._settings.setValue("ui/last_phrase", self.opening_phrase)
         self._settings.setValue("ui/last_sticker", self.sticker_name)
         self._build_ui()
+        icon_path = bundled_ui_asset_path("app-icon.png")
+        if icon_path is not None:
+            self.setWindowIcon(QIcon(str(icon_path)))
 
     def _card(self, object_name: str = "card", shadow: bool = False) -> QFrame:
         frame = QFrame()
@@ -361,8 +368,6 @@ class WordVoiceWindow(QMainWindow):
                 Qt.SmoothTransformation,
             )
         )
-        if self.windowIcon().isNull():
-            self.setWindowIcon(QIcon(str(path)))
 
     @Slot()
     def rotate_phrase(self) -> None:
@@ -533,8 +538,11 @@ class WordVoiceWindow(QMainWindow):
         self.table.verticalHeader().setDefaultSectionSize(34)
         header_view = self.table.horizontalHeader()
         for column in (0, 1, 2, 4, 5):
-            header_view.setSectionResizeMode(column, QHeaderView.ResizeToContents)
+            header_view.setSectionResizeMode(column, QHeaderView.Interactive)
+        for column, width in {0: 62, 1: 120, 2: 150, 4: 70, 5: 92}.items():
+            header_view.resizeSection(column, width)
         header_view.setSectionResizeMode(3, QHeaderView.Stretch)
+        header_view.setStretchLastSection(False)
         self.table.doubleClicked.connect(self.play_selected)
         table_layout.addWidget(self.table)
         root.addWidget(table_card, 1)
