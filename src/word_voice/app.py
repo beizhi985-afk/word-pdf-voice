@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import os
 import random
+import re
+import shutil
 import sys
 import threading
 import traceback
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QIcon, QPixmap
+from PySide6.QtGui import QColor, QIcon, QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -43,13 +45,19 @@ from .anki_export import AnkiExportError, export_anki_deck
 from .extractor import extract_vocabulary_pdf
 from .models import VocabularyEntry
 from .samples import select_pronunciation_samples
+from .speech import chinese_voice_available, speak_chinese
 from .storage import (
+    DatabaseBackup,
     ImportedProject,
     ProjectWorkspace,
     VocabularyStore,
+    create_database_backup,
+    custom_stickers_root,
+    list_database_backups,
     list_imported_projects,
     open_imported_project,
     prepare_default_workspace,
+    restore_database_backup,
 )
 from .tts import AudioService, KokoroOnnxEngine, TtsConfig
 
@@ -125,15 +133,21 @@ HEALING_PHRASES = (
     "愿你在一个个单词里，遇见更辽阔的自己。",
 )
 
-UI_STICKERS = (
-    "crayon-shinnosuke.png",
-    "crayon-kazama.png",
-    "crayon-masao.png",
-    "crayon-bochan.png",
-    "crayon-nene.png",
+BUILTIN_STICKERS = (
     "chibi-student.png",
     "cozy-cloud-cat.png",
+    "moon-rabbit-study.png",
+    "clever-fox-study.png",
+    "sprout-robot-study.png",
 )
+UI_STICKERS = BUILTIN_STICKERS
+
+LEARNING_LABELS = {
+    "unrated": "未标记",
+    "known": "认识",
+    "unsure": "模糊",
+    "unknown": "不认识",
+}
 
 
 def choose_rotating_value(
@@ -160,6 +174,67 @@ def bundled_ui_asset_path(filename: str) -> Path | None:
         (root / "assets" / "ui" / filename for root in _resource_roots() if (root / "assets" / "ui" / filename).is_file()),
         None,
     )
+
+
+def available_sticker_paths() -> tuple[Path, ...]:
+    builtins = tuple(
+        path for name in BUILTIN_STICKERS if (path := bundled_ui_asset_path(name)) is not None
+    )
+    custom_root = custom_stickers_root()
+    try:
+        custom = tuple(
+            sorted(
+                (
+                    path
+                    for path in custom_root.iterdir()
+                    if path.is_file()
+                    and path.suffix.casefold() in {".png", ".jpg", ".jpeg", ".webp"}
+                ),
+                key=lambda path: path.name.casefold(),
+            )
+        ) if custom_root.is_dir() else ()
+    except OSError:
+        custom = ()
+    return builtins + custom
+
+
+def import_custom_sticker(source: str | Path) -> Path:
+    source_path = Path(source).expanduser().resolve()
+    image = QImage(str(source_path))
+    if image.isNull():
+        raise ValueError("所选文件不是可以读取的图片")
+    root = custom_stickers_root()
+    root.mkdir(parents=True, exist_ok=True)
+    safe_stem = re.sub(r"[^0-9a-zA-Z\u3400-\u9fff-]+", "-", source_path.stem).strip("-")
+    safe_stem = safe_stem[:60] or "custom-sticker"
+    suffix = source_path.suffix.casefold()
+    destination = root / f"{safe_stem}{suffix}"
+    number = 2
+    while destination.exists() and destination.resolve() != source_path:
+        destination = root / f"{safe_stem}-{number}{suffix}"
+        number += 1
+    if destination.resolve() != source_path:
+        shutil.copy2(source_path, destination)
+    return destination
+
+
+def _play_wav_sync(path: Path) -> None:
+    if not hasattr(sys, "getwindowsversion"):
+        raise RuntimeError("当前播放入口仅支持 Windows")
+    import winsound
+
+    winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_SYNC)
+
+
+def _stop_windows_sound() -> None:
+    if not hasattr(sys, "getwindowsversion"):
+        return
+    import winsound
+
+    try:
+        winsound.PlaySound(None, winsound.SND_PURGE)
+    except RuntimeError:
+        winsound.PlaySound(None, 0)
 
 
 def bundled_model_paths() -> tuple[Path, Path] | None:
@@ -292,6 +367,72 @@ class PlayWorker(QObject):
             self.error.emit(str(exc))
 
 
+class ContinuousPlaybackWorker(QObject):
+    current = Signal(int, int, int, int, str)
+    item_error = Signal(str)
+    finished = Signal(int, int, bool)
+
+    def __init__(
+        self,
+        service: AudioService,
+        entries: list[VocabularyEntry],
+        repeat_count: int,
+        pause_seconds: float,
+        include_meaning: bool,
+        stop_event: threading.Event,
+        audio_player=None,
+        meaning_speaker=None,
+    ):
+        super().__init__()
+        self.service = service
+        self.entries = entries
+        self.repeat_count = max(1, min(5, repeat_count))
+        self.pause_seconds = max(0.0, pause_seconds)
+        self.include_meaning = include_meaning
+        self.stop_event = stop_event
+        self.audio_player = audio_player or _play_wav_sync
+        self.meaning_speaker = meaning_speaker or speak_chinese
+
+    @Slot()
+    def run(self) -> None:
+        completed = 0
+        failed = 0
+        try:
+            for position, entry in enumerate(self.entries, start=1):
+                if self.stop_event.is_set():
+                    break
+                try:
+                    path = self.service.ensure_audio(entry)
+                    for repeat_index in range(1, self.repeat_count + 1):
+                        if self.stop_event.is_set():
+                            break
+                        self.current.emit(
+                            entry.sequence,
+                            position,
+                            len(self.entries),
+                            repeat_index,
+                            entry.word,
+                        )
+                        self.audio_player(path)
+                    if self.stop_event.is_set():
+                        break
+                    if self.include_meaning:
+                        self.meaning_speaker(entry.meaning, self.stop_event)
+                    if self.stop_event.is_set():
+                        break
+                    completed += 1
+                except Exception as exc:
+                    failed += 1
+                    self.item_error.emit(f"{entry.word}：{exc}")
+                if position < len(self.entries) and self.pause_seconds:
+                    if self.stop_event.wait(self.pause_seconds):
+                        break
+            self.finished.emit(completed, failed, self.stop_event.is_set())
+        except Exception as exc:
+            self.item_error.emit(str(exc))
+            self.finished.emit(completed, failed + 1, self.stop_event.is_set())
+
+
 class EntryEditDialog(QDialog):
     def __init__(self, entry: VocabularyEntry, parent: QWidget | None = None):
         super().__init__(parent)
@@ -313,11 +454,180 @@ class EntryEditDialog(QDialog):
         layout.addRow(buttons)
 
 
+class BackupDialog(QDialog):
+    def __init__(
+        self,
+        project: ImportedProject | None,
+        backups: list[DatabaseBackup],
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.project = project
+        self.backups = backups
+        self.restored_workspace: Path | None = None
+        self.setWindowTitle("数据库备份与恢复")
+        self.resize(650, 420)
+        layout = QVBoxLayout(self)
+        title = QLabel("保护你的词汇、修改和学习标记")
+        title.setObjectName("heroTitle")
+        title.setStyleSheet("font-size: 20px;")
+        intro = QLabel("软件每天自动保留一次备份；恢复前还会保存当前数据库。")
+        intro.setObjectName("muted")
+        layout.addWidget(title)
+        layout.addWidget(intro)
+        self.backup_list = QListWidget()
+        layout.addWidget(self.backup_list, 1)
+        actions = QHBoxLayout()
+        self.create_button = QPushButton("立即备份")
+        self.create_button.setProperty("kind", "mint")
+        self.create_button.setEnabled(project is not None)
+        self.create_button.clicked.connect(self._create_backup)
+        restore_button = QPushButton("恢复所选")
+        restore_button.setProperty("kind", "primary")
+        restore_button.clicked.connect(self._restore_selected)
+        close_button = QPushButton("关闭")
+        close_button.clicked.connect(self.reject)
+        actions.addWidget(self.create_button)
+        actions.addStretch()
+        actions.addWidget(close_button)
+        actions.addWidget(restore_button)
+        layout.addLayout(actions)
+        self._refresh()
+
+    def _refresh(self) -> None:
+        if self.project is not None:
+            self.backups = list_database_backups(self.project.workspace)
+        self.backup_list.clear()
+        for index, backup in enumerate(self.backups):
+            item = QListWidgetItem(
+                f"{backup.workspace.root.name}\n{backup.display_time} · {backup.reason}"
+            )
+            item.setData(Qt.UserRole, index)
+            self.backup_list.addItem(item)
+        if self.backups:
+            self.backup_list.setCurrentRow(0)
+
+    def _create_backup(self) -> None:
+        if self.project is None:
+            return
+        try:
+            path = create_database_backup(self.project.workspace.database_path, "manual")
+            if path is None:
+                raise RuntimeError("当前数据库还没有可备份的数据")
+            self._refresh()
+            QMessageBox.information(self, "备份完成", f"已经保存：\n{path}")
+        except Exception as exc:
+            QMessageBox.critical(self, "备份失败", str(exc))
+
+    def _restore_selected(self) -> None:
+        item = self.backup_list.currentItem()
+        if item is None:
+            QMessageBox.information(self, "请选择备份", "请先选择一份要恢复的数据库备份。")
+            return
+        backup = self.backups[int(item.data(Qt.UserRole))]
+        answer = QMessageBox.question(
+            self,
+            "确认恢复",
+            f"将把“{backup.workspace.root.name}”恢复到 {backup.display_time}。\n"
+            "当前数据库会先自动备份，是否继续？",
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            restore_database_backup(backup)
+            self.restored_workspace = backup.workspace.root
+            QMessageBox.information(self, "恢复完成", "数据库已经恢复并通过完整性检查。")
+            self.accept()
+        except Exception as exc:
+            QMessageBox.critical(self, "恢复失败", str(exc))
+
+
+class StickerManagerDialog(QDialog):
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.last_imported: Path | None = None
+        self.setWindowTitle("我的贴纸")
+        self.resize(560, 390)
+        layout = QVBoxLayout(self)
+        title = QLabel("加入你喜欢的学习贴纸")
+        title.setObjectName("heroTitle")
+        title.setStyleSheet("font-size: 20px;")
+        intro = QLabel("支持 PNG、JPG、JPEG 和 WebP；图片只保存在这台电脑。")
+        intro.setObjectName("muted")
+        layout.addWidget(title)
+        layout.addWidget(intro)
+        self.sticker_list = QListWidget()
+        layout.addWidget(self.sticker_list, 1)
+        actions = QHBoxLayout()
+        add_button = QPushButton("添加贴纸")
+        add_button.setProperty("kind", "mint")
+        add_button.clicked.connect(self._add_sticker)
+        delete_button = QPushButton("删除所选")
+        delete_button.clicked.connect(self._delete_selected)
+        close_button = QPushButton("完成")
+        close_button.setProperty("kind", "primary")
+        close_button.clicked.connect(self.accept)
+        actions.addWidget(add_button)
+        actions.addWidget(delete_button)
+        actions.addStretch()
+        actions.addWidget(close_button)
+        layout.addLayout(actions)
+        self._refresh()
+
+    def _refresh(self) -> None:
+        self.sticker_list.clear()
+        for path in available_sticker_paths():
+            item = QListWidgetItem(
+                f"{'内置原创' if path.name in BUILTIN_STICKERS else '我的贴纸'} · {path.name}"
+            )
+            item.setData(Qt.UserRole, str(path))
+            self.sticker_list.addItem(item)
+
+    def _add_sticker(self) -> None:
+        source, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择贴纸图片",
+            "",
+            "图片 (*.png *.jpg *.jpeg *.webp)",
+        )
+        if not source:
+            return
+        try:
+            self.last_imported = import_custom_sticker(source)
+            self._refresh()
+            QMessageBox.information(self, "添加成功", "新贴纸已经加入轮换列表。")
+        except Exception as exc:
+            QMessageBox.warning(self, "无法添加贴纸", str(exc))
+
+    def _delete_selected(self) -> None:
+        item = self.sticker_list.currentItem()
+        if item is None:
+            return
+        path = Path(str(item.data(Qt.UserRole)))
+        if path.name in BUILTIN_STICKERS:
+            QMessageBox.information(self, "内置贴纸", "内置原创贴纸不会从安装包中删除。")
+            return
+        answer = QMessageBox.question(self, "删除贴纸", f"确定删除“{path.name}”吗？")
+        if answer == QMessageBox.Yes:
+            try:
+                path.unlink(missing_ok=True)
+                self._refresh()
+            except OSError as exc:
+                QMessageBox.warning(self, "删除失败", str(exc))
+
+
 class VocabularyChoiceDialog(QDialog):
-    def __init__(self, projects: list[ImportedProject], parent: QWidget | None = None):
+    def __init__(
+        self,
+        projects: list[ImportedProject],
+        backups: list[DatabaseBackup] | None = None,
+        parent: QWidget | None = None,
+    ):
         super().__init__(parent)
         self.projects = projects
+        self.backups = backups or []
         self.import_new_requested = False
+        self.restored_workspace: Path | None = None
         self.setWindowTitle("选择词汇")
         self.resize(650, 430)
         layout = QVBoxLayout(self)
@@ -352,6 +662,8 @@ class VocabularyChoiceDialog(QDialog):
         self.import_button = QPushButton("导入新 PDF")
         self.import_button.setProperty("kind", "mint")
         self.import_button.clicked.connect(self._request_import)
+        backup_button = QPushButton("备份与恢复")
+        backup_button.clicked.connect(self._manage_backups)
         cancel_button = QPushButton("取消")
         cancel_button.clicked.connect(self.reject)
         self.open_button = QPushButton("打开所选")
@@ -359,6 +671,7 @@ class VocabularyChoiceDialog(QDialog):
         self.open_button.setEnabled(bool(projects))
         self.open_button.clicked.connect(self._open_selected)
         actions.addWidget(self.import_button)
+        actions.addWidget(backup_button)
         actions.addStretch()
         actions.addWidget(cancel_button)
         actions.addWidget(self.open_button)
@@ -380,6 +693,14 @@ class VocabularyChoiceDialog(QDialog):
         if self.selected_project is not None:
             self.accept()
 
+    def _manage_backups(self) -> None:
+        project = self.selected_project
+        backups = list_database_backups(project.workspace) if project else self.backups
+        dialog = BackupDialog(project, backups, self)
+        if dialog.exec() == QDialog.Accepted and dialog.restored_workspace is not None:
+            self.restored_workspace = dialog.restored_workspace
+            self.accept()
+
 
 class WordVoiceWindow(QMainWindow):
     def __init__(self):
@@ -393,15 +714,18 @@ class WordVoiceWindow(QMainWindow):
         self.workspace: ProjectWorkspace | None = None
         self.store: VocabularyStore | None = None
         self.stop_event = threading.Event()
+        self.playback_stop_event = threading.Event()
+        self._continuous_running = False
         self._threads: list[QThread] = []
         self._active_workers: dict[QThread, QObject] = {}
         self._settings = QSettings("WordPdfVoice", "WordPdfVoice")
         self.opening_phrase = choose_rotating_value(
             HEALING_PHRASES, str(self._settings.value("ui/last_phrase", ""))
         )
+        sticker_paths = tuple(str(path) for path in available_sticker_paths())
         self.sticker_name = choose_rotating_value(
-            UI_STICKERS, str(self._settings.value("ui/last_sticker", ""))
-        )
+            sticker_paths, str(self._settings.value("ui/last_sticker", ""))
+        ) if sticker_paths else ""
         self._settings.setValue("ui/last_phrase", self.opening_phrase)
         self._settings.setValue("ui/last_sticker", self.sticker_name)
         self._build_ui()
@@ -436,9 +760,10 @@ class WordVoiceWindow(QMainWindow):
         return frame, value
 
     def _set_sticker(self) -> None:
-        path = bundled_ui_asset_path(self.sticker_name)
-        if path is None:
+        path = Path(self.sticker_name) if self.sticker_name else None
+        if path is None or not path.is_file():
             self.sticker_label.setText("✦")
+            self.sticker_label.setPixmap(QPixmap())
             return
         pixmap = QPixmap(str(path))
         self.sticker_label.setPixmap(
@@ -448,6 +773,27 @@ class WordVoiceWindow(QMainWindow):
                 Qt.SmoothTransformation,
             )
         )
+
+    @Slot()
+    def rotate_sticker(self) -> None:
+        sticker_paths = tuple(str(path) for path in available_sticker_paths())
+        if not sticker_paths:
+            return
+        self.sticker_name = choose_rotating_value(sticker_paths, self.sticker_name)
+        self._settings.setValue("ui/last_sticker", self.sticker_name)
+        self._set_sticker()
+
+    @Slot()
+    def manage_stickers(self) -> None:
+        dialog = StickerManagerDialog(self)
+        dialog.exec()
+        if dialog.last_imported is not None and dialog.last_imported.is_file():
+            self.sticker_name = str(dialog.last_imported)
+            self._settings.setValue("ui/last_sticker", self.sticker_name)
+        elif not Path(self.sticker_name).is_file():
+            paths = available_sticker_paths()
+            self.sticker_name = str(paths[0]) if paths else ""
+        self._set_sticker()
 
     @Slot()
     def rotate_phrase(self) -> None:
@@ -476,7 +822,7 @@ class WordVoiceWindow(QMainWindow):
         hero_copy.addWidget(badge, 0, Qt.AlignLeft)
         title = QLabel("把单词，变成会说话的小伙伴")
         title.setObjectName("heroTitle")
-        subtitle = QLabel("选择词汇 · 温柔试听 · 生成音频 · 导出 Anki")
+        subtitle = QLabel("选择词汇 · 连续学习 · 熟悉度标记 · 导出 Anki")
         subtitle.setObjectName("heroSubtitle")
         hero_copy.addWidget(title)
         hero_copy.addWidget(subtitle)
@@ -503,9 +849,20 @@ class WordVoiceWindow(QMainWindow):
         hero_side.setSpacing(3)
         hero_side.setAlignment(Qt.AlignCenter)
         self.sticker_label = QLabel()
-        self.sticker_label.setFixedSize(154, 88)
+        self.sticker_label.setFixedSize(154, 66)
         self.sticker_label.setAlignment(Qt.AlignCenter)
         hero_side.addWidget(self.sticker_label, 0, Qt.AlignCenter)
+        sticker_actions = QHBoxLayout()
+        sticker_actions.setSpacing(2)
+        self.sticker_button = QPushButton("换贴纸")
+        self.sticker_button.setProperty("kind", "ghost")
+        self.sticker_button.clicked.connect(self.rotate_sticker)
+        manage_sticker_button = QPushButton("＋我的贴纸")
+        manage_sticker_button.setProperty("kind", "ghost")
+        manage_sticker_button.clicked.connect(self.manage_stickers)
+        sticker_actions.addWidget(self.sticker_button)
+        sticker_actions.addWidget(manage_sticker_button)
+        hero_side.addLayout(sticker_actions)
         self.choose_button = QPushButton("选择词汇")
         self.choose_button.setProperty("kind", "primary")
         self.choose_button.setFixedSize(154, 34)
@@ -560,6 +917,14 @@ class WordVoiceWindow(QMainWindow):
         self.audio_ready_only = QCheckBox("只看已有音频")
         self.audio_ready_only.toggled.connect(self.refresh_table)
         filter_row.addWidget(self.audio_ready_only)
+        filter_row.addSpacing(10)
+        filter_row.addWidget(QLabel("学习范围"))
+        self.learning_filter = QComboBox()
+        self.learning_filter.addItem("全部词汇", "all")
+        self.learning_filter.addItem("重点复习 · 模糊＋不认识", "focus")
+        self.learning_filter.addItem("只看不认识", "unknown")
+        self.learning_filter.currentIndexChanged.connect(self.refresh_table)
+        filter_row.addWidget(self.learning_filter)
         filter_row.addStretch()
         toolbar.addLayout(filter_row)
 
@@ -594,6 +959,51 @@ class WordVoiceWindow(QMainWindow):
         settings_row.addWidget(self.sort_order)
         settings_row.addStretch()
         toolbar.addLayout(settings_row)
+
+        study_row = QHBoxLayout()
+        study_row.setSpacing(7)
+        study_label = QLabel("连续学习")
+        study_label.setObjectName("sectionTitle")
+        study_row.addWidget(study_label)
+        study_row.addWidget(QLabel("重复"))
+        self.repeat_count = QComboBox()
+        for count in range(1, 6):
+            self.repeat_count.addItem(f"{count} 次", count)
+        saved_repeat = max(1, min(5, int(self._settings.value("playback/repeat", 1))))
+        self.repeat_count.setCurrentIndex(saved_repeat - 1)
+        study_row.addWidget(self.repeat_count)
+        study_row.addWidget(QLabel("间隔"))
+        self.pause_seconds = QDoubleSpinBox()
+        self.pause_seconds.setRange(0.0, 10.0)
+        self.pause_seconds.setSingleStep(0.5)
+        self.pause_seconds.setDecimals(1)
+        self.pause_seconds.setSuffix(" 秒")
+        self.pause_seconds.setValue(float(self._settings.value("playback/pause", 1.0)))
+        study_row.addWidget(self.pause_seconds)
+        self.play_mode = QComboBox()
+        self.play_mode.addItem("只听英文", "english")
+        self.play_mode.addItem("英文＋中文释义", "bilingual")
+        saved_mode = str(self._settings.value("playback/mode", "english"))
+        self.play_mode.setCurrentIndex(1 if saved_mode == "bilingual" else 0)
+        study_row.addWidget(self.play_mode)
+        self.continuous_play_button = QPushButton("从所选开始")
+        self.continuous_play_button.setProperty("kind", "primary")
+        self.continuous_play_button.clicked.connect(self.start_continuous_playback)
+        study_row.addWidget(self.continuous_play_button)
+        stop_play_button = QPushButton("停止播放")
+        stop_play_button.clicked.connect(self.stop_continuous_playback)
+        study_row.addWidget(stop_play_button)
+        study_row.addStretch()
+        for label, status, kind in (
+            ("认识", "known", "mint"),
+            ("模糊", "unsure", "sun"),
+            ("不认识", "unknown", "lavender"),
+        ):
+            button = QPushButton(label)
+            button.setProperty("kind", kind)
+            button.clicked.connect(lambda _checked=False, value=status: self.mark_selected(value))
+            study_row.addWidget(button)
+        toolbar.addLayout(study_row)
         root.addWidget(toolbar_card)
 
         table_card = self._card("tableCard", shadow=True)
@@ -634,7 +1044,7 @@ class WordVoiceWindow(QMainWindow):
             ("编辑词条", self.edit_selected, ""),
             ("生成 30 词样本", self.generate_samples, "sun"),
             ("生成全部", self.generate_all, "lavender"),
-            ("停止", self.stop_generation, ""),
+            ("停止全部", self.stop_all_tasks, ""),
             ("打开音频文件夹", self.open_audio_folder, ""),
         ):
             button = QPushButton(label)
@@ -694,7 +1104,8 @@ class WordVoiceWindow(QMainWindow):
     @Slot()
     def choose_vocabulary(self) -> None:
         projects = list_imported_projects()
-        if not projects:
+        backups = list_database_backups()
+        if not projects and not backups:
             QMessageBox.information(
                 self,
                 "还没有词汇文档",
@@ -702,11 +1113,25 @@ class WordVoiceWindow(QMainWindow):
             )
             self.import_new_pdf()
             return
-        dialog = VocabularyChoiceDialog(projects, self)
+        dialog = VocabularyChoiceDialog(projects, backups, self)
         if dialog.exec() != QDialog.Accepted:
             return
         if dialog.import_new_requested:
             self.import_new_pdf()
+            return
+        if dialog.restored_workspace is not None:
+            restored = next(
+                (
+                    project
+                    for project in list_imported_projects()
+                    if project.workspace.root == dialog.restored_workspace
+                ),
+                None,
+            )
+            if restored is not None:
+                self.load_imported_project(restored)
+            else:
+                self._show_error("备份已恢复，但暂时无法读取这份词汇，请重新打开软件后再试。")
             return
         project = dialog.selected_project
         if project is not None:
@@ -777,7 +1202,7 @@ class WordVoiceWindow(QMainWindow):
             return
         counts = self.store.audio_counts()
         self.summary_label.setText(self.document.source_path.name)
-        self.summary_meta.setText("解析完成，可以搜索、试听、生成或导出学习卡组")
+        self.summary_meta.setText("解析完成，可以连续播放、标记熟悉度、生成或导出学习卡组")
         self.page_metric.setText(str(self.document.page_count))
         self.entry_metric.setText(str(len(self.document.entries)))
         self.issue_metric.setText(str(self.document.flagged_count))
@@ -798,14 +1223,22 @@ class WordVoiceWindow(QMainWindow):
             search=self.search.text().strip(),
             issues_only=self.issues_only.isChecked(),
             audio_ready_only=self.audio_ready_only.isChecked(),
+            learning_filter=str(self.learning_filter.currentData()),
         )
         self.table_count_label.setText(f"显示 {len(entries)} 条")
         statuses = self.store.audio_status_map()
+        learning_statuses = self.store.learning_status_map()
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(entries))
         for row_index, entry in enumerate(entries):
-            state = {"ready": "已有音频", "failed": "生成失败"}.get(statuses.get(entry.sequence), "")
-            status = entry.flag_text or state
+            state = {"ready": "已有音频", "failed": "生成失败"}.get(
+                statuses.get(entry.sequence), ""
+            )
+            learning = learning_statuses.get(entry.sequence, "unrated")
+            parts = [entry.flag_text, state]
+            if learning != "unrated":
+                parts.append(LEARNING_LABELS.get(learning, learning))
+            status = " · ".join(part for part in parts if part)
             values = (entry.sequence, entry.word, entry.phonetic, entry.meaning, entry.page, status)
             for column, value in enumerate(values):
                 item = QTableWidgetItem()
@@ -854,6 +1287,9 @@ class WordVoiceWindow(QMainWindow):
 
     @Slot()
     def play_selected(self) -> None:
+        if self._continuous_running:
+            QMessageBox.information(self, "正在连续播放", "请先停止连续播放，再单独试听。")
+            return
         entry = self.selected_entry()
         service = self._audio_service()
         if not entry or not service:
@@ -869,6 +1305,112 @@ class WordVoiceWindow(QMainWindow):
         self.status_label.setText(message)
         self._refresh_summary()
         self.refresh_table()
+
+    def _entries_from_selected_row(self) -> list[VocabularyEntry]:
+        if not self.store or self.table.currentRow() < 0:
+            return []
+        entries: list[VocabularyEntry] = []
+        for row in range(self.table.currentRow(), self.table.rowCount()):
+            item = self.table.item(row, 0)
+            entry = self.store.get_entry(int(item.text())) if item else None
+            if entry is not None:
+                entries.append(entry)
+        return entries
+
+    @Slot()
+    def start_continuous_playback(self) -> None:
+        if self._continuous_running:
+            QMessageBox.information(self, "正在连续播放", "请先停止当前连续播放任务。")
+            return
+        entries = self._entries_from_selected_row()
+        if not entries:
+            QMessageBox.information(self, "请选择起点", "请先选择一个单词作为连续播放起点。")
+            return
+        service = self._audio_service()
+        if service is None:
+            return
+        include_meaning = self.play_mode.currentData() == "bilingual"
+        if include_meaning and not chinese_voice_available():
+            QMessageBox.warning(
+                self,
+                "没有中文语音",
+                "这台电脑没有可用的 Windows 中文语音，本次将继续只播放英文。",
+            )
+            include_meaning = False
+        repeat_count = int(self.repeat_count.currentData())
+        pause_seconds = float(self.pause_seconds.value())
+        self._settings.setValue("playback/repeat", repeat_count)
+        self._settings.setValue("playback/pause", pause_seconds)
+        self._settings.setValue("playback/mode", str(self.play_mode.currentData()))
+        self.playback_stop_event.clear()
+        _stop_windows_sound()
+        self._continuous_running = True
+        self.continuous_play_button.setEnabled(False)
+        worker = ContinuousPlaybackWorker(
+            service,
+            entries,
+            repeat_count,
+            pause_seconds,
+            include_meaning,
+            self.playback_stop_event,
+        )
+        worker.current.connect(self._on_continuous_current)
+        worker.item_error.connect(self._on_continuous_item_error)
+        worker.finished.connect(self._on_continuous_finished)
+        self._start_worker(worker, worker.run, (worker.finished,))
+
+    @Slot(int, int, int, int, str)
+    def _on_continuous_current(
+        self,
+        sequence: int,
+        position: int,
+        total: int,
+        repeat_index: int,
+        word: str,
+    ) -> None:
+        self._select_sequence(sequence)
+        self.progress.setValue(int(position / total * 100) if total else 0)
+        self.status_label.setText(
+            f"连续播放 {position}/{total}：{word} · 第 {repeat_index} 次"
+        )
+
+    @Slot(str)
+    def _on_continuous_item_error(self, message: str) -> None:
+        self.status_label.setText(f"已跳过：{message}")
+
+    @Slot(int, int, bool)
+    def _on_continuous_finished(self, completed: int, failed: int, stopped: bool) -> None:
+        self._continuous_running = False
+        self.continuous_play_button.setEnabled(True)
+        self.status_label.setText(
+            f"{'连续播放已停止' if stopped else '连续播放完成'}：完成 {completed}，跳过 {failed}"
+        )
+        self._refresh_summary()
+        self.refresh_table()
+
+    def _select_sequence(self, sequence: int) -> None:
+        for row in range(self.table.rowCount()):
+            item = self.table.item(row, 0)
+            if item and int(item.text()) == sequence:
+                self.table.selectRow(row)
+                self.table.scrollToItem(item)
+                return
+
+    @Slot()
+    def stop_continuous_playback(self) -> None:
+        self.playback_stop_event.set()
+        _stop_windows_sound()
+        if self._continuous_running:
+            self.status_label.setText("正在停止连续播放…")
+
+    def mark_selected(self, status: str) -> None:
+        entry = self.selected_entry()
+        if not entry or not self.store:
+            return
+        self.store.set_learning_status(entry.sequence, status)
+        self.refresh_table()
+        self._select_sequence(entry.sequence)
+        self.status_label.setText(f"{entry.word} 已标记为“{LEARNING_LABELS[status]}”")
 
     @Slot()
     def edit_selected(self) -> None:
@@ -927,6 +1469,13 @@ class WordVoiceWindow(QMainWindow):
     def stop_generation(self) -> None:
         self.stop_event.set()
         self.status_label.setText("将在当前单词完成后停止")
+
+    @Slot()
+    def stop_all_tasks(self) -> None:
+        self.stop_event.set()
+        self.playback_stop_event.set()
+        _stop_windows_sound()
+        self.status_label.setText("正在停止生成或播放任务…")
 
     @Slot()
     def open_audio_folder(self) -> None:

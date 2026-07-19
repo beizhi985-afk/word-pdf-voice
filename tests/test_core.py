@@ -3,6 +3,8 @@ from __future__ import annotations
 import tempfile
 import unittest
 import wave
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from word_voice.models import ExtractedDocument, VocabularyEntry
@@ -10,10 +12,14 @@ from word_voice.samples import select_pronunciation_samples
 from word_voice.storage import (
     ProjectWorkspace,
     VocabularyStore,
+    create_database_backup,
+    list_database_backups,
     list_imported_projects,
     migrate_legacy_workspace,
     open_imported_project,
+    restore_database_backup,
 )
+from word_voice.speech import meaning_for_speech
 from word_voice.tts import AudioService, audio_filename
 
 
@@ -95,6 +101,83 @@ class AudioProfileCacheTests(unittest.TestCase):
 
 
 class StorageTests(unittest.TestCase):
+    def test_v032_database_is_backed_up_and_migrated_with_learning_status(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "project.sqlite3"
+            with closing(sqlite3.connect(database)) as connection:
+                connection.executescript(
+                    """
+                    CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                    CREATE TABLE entries (
+                        sequence INTEGER PRIMARY KEY,
+                        source_word TEXT NOT NULL, source_phonetic TEXT NOT NULL,
+                        source_meaning TEXT NOT NULL, word TEXT NOT NULL,
+                        phonetic TEXT NOT NULL, meaning TEXT NOT NULL,
+                        page INTEGER NOT NULL, flags_json TEXT NOT NULL DEFAULT '[]',
+                        pronunciation_override TEXT NOT NULL DEFAULT '',
+                        manually_edited INTEGER NOT NULL DEFAULT 0,
+                        audio_status TEXT NOT NULL DEFAULT 'missing',
+                        audio_path TEXT NOT NULL DEFAULT '', audio_error TEXT NOT NULL DEFAULT '',
+                        audio_profile TEXT NOT NULL DEFAULT ''
+                    );
+                    INSERT INTO entries(
+                        sequence, source_word, source_phonetic, source_meaning,
+                        word, phonetic, meaning, page
+                    ) VALUES (1, 'old', '', '旧数据', 'old', '', '旧数据', 1);
+                    """
+                )
+                connection.commit()
+
+            store = VocabularyStore(database)
+
+            self.assertEqual("unrated", store.learning_status(1))
+            self.assertEqual("0.4.0", store.get_metadata("data_version"))
+            backups = list_database_backups(ProjectWorkspace.create(Path(directory)))
+            self.assertTrue(any("before v040 migration" in item.reason for item in backups))
+
+    def test_learning_status_filters_focus_words(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = VocabularyStore(Path(directory) / "project.sqlite3")
+            store.import_document(
+                ExtractedDocument(
+                    Path("sample.pdf"),
+                    "abc",
+                    1,
+                    [entry(1, "known"), entry(2, "unsure"), entry(3, "unknown")],
+                    [],
+                )
+            )
+            store.set_learning_status(1, "known")
+            store.set_learning_status(2, "unsure")
+            store.set_learning_status(3, "unknown")
+
+            focus = store.list_entries(learning_filter="focus")
+
+            self.assertEqual([2, 3], [item.sequence for item in focus])
+            self.assertEqual({"unrated": 0, "known": 1, "unsure": 1, "unknown": 1}, store.learning_counts())
+
+    def test_database_backup_can_restore_learning_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = ProjectWorkspace.create(Path(directory) / "saved")
+            store = VocabularyStore(workspace.database_path)
+            store.import_document(
+                ExtractedDocument(Path("sample.pdf"), "abc", 1, [entry(1, "word")], [])
+            )
+            store.set_learning_status(1, "unknown")
+            backup_path = create_database_backup(workspace.database_path, "manual")
+            self.assertIsNotNone(backup_path)
+            store.set_learning_status(1, "known")
+            backup = next(
+                item
+                for item in list_database_backups(workspace)
+                if item.path == backup_path
+            )
+
+            restore_database_backup(backup)
+            restored = VocabularyStore(workspace.database_path)
+
+            self.assertEqual("unknown", restored.learning_status(1))
+
     def test_imported_projects_can_be_discovered_and_opened_without_source_pdf(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             projects_root = Path(directory) / "projects"
@@ -207,6 +290,14 @@ class StorageTests(unittest.TestCase):
             source_audio.unlink()
             self.assertTrue(Path(migrated_path).is_file())
             self.assertFalse(migrate_legacy_workspace(legacy.root, target).performed)
+
+
+class SpeechTests(unittest.TestCase):
+    def test_chinese_meaning_is_cleaned_for_speech(self) -> None:
+        self.assertEqual(
+            "附近的，在附近，在附近",
+            meaning_for_speech("adj.附近的 adv.在附近 prep.在...附近"),
+        )
 
 
 if __name__ == "__main__":

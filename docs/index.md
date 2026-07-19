@@ -21,6 +21,8 @@
 - [PyInstaller 漏装依赖包数据](experience-Library/2026-07-18-pyinstaller-package-data.md)：构建后用成品程序生成真实 WAV，防止冻结版缺少 JSON 等运行资源。
 - [Anki 教材尖括号标记被隐藏](experience-Library/2026-07-18-anki-html-escaping.md)：导出前转义用户字段，避免 `<古>` 等被当作 HTML。
 - [语音设置变化但仍播放旧缓存](experience-Library/2026-07-18-tts-profile-cache.md)：把声音、语速和语言纳入缓存配置，避免继续播放旧 WAV。
+- [SQLite 版本迁移、自动备份与可恢复替换](experience-Library/2026-07-19-sqlite-backup-and-recovery.md)：迁移前一致性快照、每日备份、完整性检查和原子恢复规则。
+- [Windows PowerShell 5 解析 UTF-8 构建脚本失败](experience-Library/2026-07-19-powershell-utf8-build-script.md)：避免无 BOM 中文脚本破坏字符串边界，并要求用实际 PowerShell 完整构建。
 
 ## 版本规格
 

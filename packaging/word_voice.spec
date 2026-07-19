@@ -4,7 +4,7 @@ from PyInstaller.utils.hooks import collect_all
 
 
 project_root = Path(SPECPATH).parent
-app_name = "WordPdfVoice-v0.3.2"
+app_name = "WordPdfVoice-v0.4.0"
 datas = []
 binaries = []
 hiddenimports = []

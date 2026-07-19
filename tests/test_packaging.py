@@ -17,13 +17,15 @@ class PackagingRegressionTests(unittest.TestCase):
     def test_build_runs_real_portable_tts_smoke(self) -> None:
         build_script = (ROOT / "scripts" / "build.ps1").read_text(encoding="utf-8")
         self.assertIn("verify_portable.py", build_script)
+        self.assertIn("verify_version.py", build_script)
         self.assertTrue((ROOT / "scripts" / "verify_portable.py").is_file())
+        self.assertTrue((ROOT / "scripts" / "verify_version.py").is_file())
 
     def test_build_uses_current_version_name(self) -> None:
         specification = (ROOT / "packaging" / "word_voice.spec").read_text(encoding="utf-8")
         build_script = (ROOT / "scripts" / "build.ps1").read_text(encoding="utf-8")
-        self.assertIn('app_name = "WordPdfVoice-v0.3.2"', specification)
-        self.assertIn("dist\\WordPdfVoice-v0.3.2\\WordPdfVoice-v0.3.2.exe", build_script)
+        self.assertIn('app_name = "WordPdfVoice-v0.4.0"', specification)
+        self.assertIn("dist\\WordPdfVoice-v0.4.0\\WordPdfVoice-v0.4.0.exe", build_script)
 
     def test_ui_stickers_and_book_icon_are_transparent_and_packaged(self) -> None:
         specification = (ROOT / "packaging" / "word_voice.spec").read_text(encoding="utf-8")
@@ -32,15 +34,14 @@ class PackagingRegressionTests(unittest.TestCase):
         self.assertIn("icon=str(app_icon)", specification)
         self.assertTrue((ROOT / "assets" / "ui" / "app-icon.ico").is_file())
         self.assertFalse((ROOT / "assets" / "ui" / "headphone-dino.png").exists())
+        self.assertFalse(any((ROOT / "assets" / "ui").glob("crayon-*.png")))
         for filename in (
             "app-icon.png",
-            "crayon-shinnosuke.png",
-            "crayon-kazama.png",
-            "crayon-masao.png",
-            "crayon-bochan.png",
-            "crayon-nene.png",
             "chibi-student.png",
             "cozy-cloud-cat.png",
+            "moon-rabbit-study.png",
+            "clever-fox-study.png",
+            "sprout-robot-study.png",
         ):
             image = QImage(str(ROOT / "assets" / "ui" / filename))
             self.assertFalse(image.isNull(), filename)

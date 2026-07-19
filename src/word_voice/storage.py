@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sqlite3
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
@@ -53,6 +55,22 @@ class ImportedProject:
         return self.source_path.name or self.workspace.root.name
 
 
+@dataclass(frozen=True, slots=True)
+class DatabaseBackup:
+    workspace: ProjectWorkspace
+    path: Path
+    created_at: float
+    reason: str
+
+    @property
+    def display_time(self) -> str:
+        return datetime.fromtimestamp(self.created_at).strftime("%Y-%m-%d %H:%M:%S")
+
+
+DATA_VERSION = "0.4.0"
+LEARNING_STATUSES = ("unrated", "known", "unsure", "unknown")
+
+
 def _local_data_base() -> Path:
     local_app_data = os.environ.get("LOCALAPPDATA")
     return Path(local_app_data) if local_app_data else Path.home() / ".word-pdf-voice"
@@ -70,6 +88,106 @@ def default_workspace_root(pdf_path: str | Path) -> Path:
 
 def imported_projects_root() -> Path:
     return _local_data_base() / "WordPdfVoice" / "v0.2" / "projects"
+
+
+def custom_stickers_root() -> Path:
+    return _local_data_base() / "WordPdfVoice" / "v0.2" / "custom-stickers"
+
+
+def _backup_reason(path: Path) -> str:
+    match = re.match(r"\d{8}-\d{6}-(.+)\.sqlite3$", path.name)
+    return match.group(1).replace("-", " ") if match else "历史备份"
+
+
+def _database_is_valid(path: Path) -> bool:
+    try:
+        with closing(sqlite3.connect(path)) as connection:
+            result = connection.execute("PRAGMA quick_check").fetchone()
+        return bool(result and result[0] == "ok")
+    except (OSError, sqlite3.Error):
+        return False
+
+
+def create_database_backup(
+    database_path: str | Path,
+    reason: str = "manual",
+    *,
+    once_per_day: bool = False,
+    keep: int = 12,
+) -> Path | None:
+    source_path = Path(database_path).expanduser().resolve()
+    if not source_path.is_file() or not _database_is_valid(source_path):
+        return None
+    backup_dir = source_path.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    safe_reason = re.sub(r"[^a-z0-9-]+", "-", reason.casefold()).strip("-") or "manual"
+    date_prefix = datetime.now().strftime("%Y%m%d")
+    existing = sorted(backup_dir.glob(f"{date_prefix}-*-{safe_reason}.sqlite3"))
+    if once_per_day and existing:
+        return existing[-1]
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    destination_path = backup_dir / f"{timestamp}-{safe_reason}.sqlite3"
+    suffix = 1
+    while destination_path.exists():
+        destination_path = backup_dir / f"{timestamp}-{safe_reason}-{suffix}.sqlite3"
+        suffix += 1
+    with closing(sqlite3.connect(source_path)) as source, closing(
+        sqlite3.connect(destination_path)
+    ) as destination:
+        source.backup(destination)
+        destination.commit()
+    if not _database_is_valid(destination_path):
+        destination_path.unlink(missing_ok=True)
+        raise sqlite3.DatabaseError("数据库备份完整性检查失败")
+    backups = sorted(backup_dir.glob("*.sqlite3"), key=lambda path: path.stat().st_mtime)
+    for expired in backups[:-max(keep, 1)]:
+        expired.unlink(missing_ok=True)
+    return destination_path
+
+
+def list_database_backups(
+    workspace: ProjectWorkspace | None = None,
+    projects_root: str | Path | None = None,
+) -> list[DatabaseBackup]:
+    if workspace is not None:
+        workspace_roots = [workspace.root]
+    else:
+        root = Path(projects_root).expanduser().resolve() if projects_root else imported_projects_root()
+        workspace_roots = [path for path in root.glob("*") if path.is_dir()]
+    backups: list[DatabaseBackup] = []
+    for workspace_root in workspace_roots:
+        project_workspace = ProjectWorkspace.create(workspace_root)
+        for path in (workspace_root / "backups").glob("*.sqlite3"):
+            if _database_is_valid(path):
+                backups.append(
+                    DatabaseBackup(
+                        workspace=project_workspace,
+                        path=path,
+                        created_at=path.stat().st_mtime,
+                        reason=_backup_reason(path),
+                    )
+                )
+    return sorted(backups, key=lambda item: item.created_at, reverse=True)
+
+
+def restore_database_backup(backup: DatabaseBackup) -> Path:
+    if not _database_is_valid(backup.path):
+        raise sqlite3.DatabaseError("所选备份已经损坏，不能恢复")
+    target = backup.workspace.database_path
+    if target.is_file() and _database_is_valid(target):
+        create_database_backup(target, "before-restore")
+    temporary = target.with_name("project.restore.sqlite3")
+    temporary.unlink(missing_ok=True)
+    with closing(sqlite3.connect(backup.path)) as source, closing(
+        sqlite3.connect(temporary)
+    ) as destination:
+        source.backup(destination)
+        destination.commit()
+    if not _database_is_valid(temporary):
+        temporary.unlink(missing_ok=True)
+        raise sqlite3.DatabaseError("恢复后的数据库完整性检查失败")
+    os.replace(temporary, target)
+    return target
 
 
 def legacy_workspace_root(pdf_path: str | Path) -> Path:
@@ -190,7 +308,19 @@ class VocabularyStore:
     def __init__(self, database_path: str | Path):
         self.database_path = Path(database_path)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.database_path.is_file() and self._needs_v040_migration():
+            create_database_backup(
+                self.database_path,
+                "before-v040-migration",
+                once_per_day=True,
+            )
         self._initialize()
+        if self.entry_count():
+            create_database_backup(
+                self.database_path,
+                "automatic",
+                once_per_day=True,
+            )
 
     def connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path)
@@ -231,7 +361,8 @@ class VocabularyStore:
                     audio_status TEXT NOT NULL DEFAULT 'missing',
                     audio_path TEXT NOT NULL DEFAULT '',
                     audio_error TEXT NOT NULL DEFAULT '',
-                    audio_profile TEXT NOT NULL DEFAULT ''
+                    audio_profile TEXT NOT NULL DEFAULT '',
+                    learning_status TEXT NOT NULL DEFAULT 'unrated'
                 );
                 """
             )
@@ -242,6 +373,33 @@ class VocabularyStore:
                 connection.execute(
                     "ALTER TABLE entries ADD COLUMN audio_profile TEXT NOT NULL DEFAULT ''"
                 )
+            if "learning_status" not in columns:
+                connection.execute(
+                    "ALTER TABLE entries ADD COLUMN learning_status TEXT NOT NULL DEFAULT 'unrated'"
+                )
+            connection.execute(
+                "INSERT INTO metadata(key, value) VALUES('data_version', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (DATA_VERSION,),
+            )
+
+    def _needs_v040_migration(self) -> bool:
+        try:
+            with closing(sqlite3.connect(self.database_path)) as connection:
+                tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                }
+                if "entries" not in tables:
+                    return False
+                columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(entries)").fetchall()
+                }
+            return "learning_status" not in columns
+        except sqlite3.Error:
+            return False
 
     def set_metadata(self, key: str, value: str) -> None:
         with self.session() as connection:
@@ -257,6 +415,12 @@ class VocabularyStore:
         return row["value"] if row else default
 
     def import_document(self, document: ExtractedDocument) -> None:
+        if self.entry_count():
+            create_database_backup(
+                self.database_path,
+                "before-reimport",
+                once_per_day=True,
+            )
         with self.session() as connection:
             connection.execute(
                 "INSERT INTO metadata(key, value) VALUES('source_path', ?) "
@@ -322,6 +486,7 @@ class VocabularyStore:
         issues_only: bool = False,
         limit: int | None = None,
         audio_ready_only: bool = False,
+        learning_filter: str = "all",
     ) -> list[VocabularyEntry]:
         query = "SELECT * FROM entries"
         clauses: list[str] = []
@@ -334,6 +499,11 @@ class VocabularyStore:
             clauses.append("flags_json <> '[]'")
         if audio_ready_only:
             clauses.append("audio_status = 'ready'")
+        if learning_filter == "focus":
+            clauses.append("learning_status IN ('unsure', 'unknown')")
+        elif learning_filter in LEARNING_STATUSES:
+            clauses.append("learning_status = ?")
+            parameters.append(learning_filter)
         if clauses:
             query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY sequence"
@@ -444,6 +614,37 @@ class VocabularyStore:
         with self.session() as connection:
             rows = connection.execute("SELECT sequence, audio_status FROM entries").fetchall()
         return {int(row["sequence"]): row["audio_status"] for row in rows}
+
+    def set_learning_status(self, sequence: int, status: str) -> None:
+        if status not in LEARNING_STATUSES:
+            raise ValueError(f"不支持的学习状态：{status}")
+        with self.session() as connection:
+            connection.execute(
+                "UPDATE entries SET learning_status=? WHERE sequence=?",
+                (status, sequence),
+            )
+
+    def learning_status(self, sequence: int) -> str:
+        with self.session() as connection:
+            row = connection.execute(
+                "SELECT learning_status FROM entries WHERE sequence=?", (sequence,)
+            ).fetchone()
+        return str(row["learning_status"]) if row else "unrated"
+
+    def learning_status_map(self) -> dict[int, str]:
+        with self.session() as connection:
+            rows = connection.execute("SELECT sequence, learning_status FROM entries").fetchall()
+        return {int(row["sequence"]): str(row["learning_status"]) for row in rows}
+
+    def learning_counts(self) -> dict[str, int]:
+        result = {status: 0 for status in LEARNING_STATUSES}
+        with self.session() as connection:
+            rows = connection.execute(
+                "SELECT learning_status, COUNT(*) AS count FROM entries GROUP BY learning_status"
+            ).fetchall()
+        for row in rows:
+            result[str(row["learning_status"])] = int(row["count"])
+        return result
 
     def entry_count(self) -> int:
         with self.session() as connection:
