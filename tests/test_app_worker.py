@@ -20,9 +20,11 @@ from word_voice.app import (
     BUILTIN_STICKERS,
     HEALING_PHRASES,
     ContinuousPlaybackWorker,
+    ImportPreviewDialog,
     WordVoiceWindow,
     choose_rotating_value,
     import_custom_sticker,
+    run_portable_extract_smoke,
 )
 from word_voice.models import ExtractedDocument, VocabularyEntry
 from word_voice.storage import ProjectWorkspace, VocabularyStore, list_imported_projects
@@ -71,7 +73,7 @@ class WorkerLifetimeTests(unittest.TestCase):
         window = WordVoiceWindow()
         labels = {button.text() for button in window.findChildren(QPushButton)}
         action_labels = {action.text() for action in window.more_menu.actions()}
-        self.assertEqual("单词文档配音 v0.5.0", window.windowTitle())
+        self.assertEqual("单词文档配音 v0.6.0", window.windowTitle())
         self.assertEqual("选择词汇", window.choose_button.text())
         self.assertEqual("还没有选择词汇", window.summary_label.text())
         self.assertEqual("已有音频", window.audio_ready_only.text())
@@ -98,7 +100,89 @@ class WorkerLifetimeTests(unittest.TestCase):
         self.assertIn("备份与恢复", action_labels)
         self.assertEqual(5, window.repeat_count.count())
         self.assertEqual("只听英文", window.play_mode.currentText())
+        self.assertFalse(window.cancel_analysis_button.isVisible())
         window.close()
+
+    def test_layout_results_require_confirmation_before_import(self) -> None:
+        document = ExtractedDocument(
+            Path("complex.pdf"),
+            "hash",
+            2,
+            [
+                VocabularyEntry(
+                    1,
+                    "take notes",
+                    "",
+                    "做笔记",
+                    2,
+                    confidence=0.92,
+                    extraction_method="layout",
+                ),
+                VocabularyEntry(
+                    2,
+                    "uncertain phrase",
+                    "",
+                    "待检查",
+                    2,
+                    confidence=0.64,
+                    extraction_method="layout",
+                ),
+            ],
+            [],
+            extraction_method="layout",
+            requires_review=True,
+        )
+        dialog = ImportPreviewDialog(document)
+
+        dialog._keep_high_confidence()
+        reviewed = dialog.reviewed_document()
+
+        self.assertEqual(["take notes"], [entry.word for entry in reviewed.entries])
+        self.assertEqual([1], [entry.sequence for entry in reviewed.entries])
+        self.assertFalse(reviewed.requires_review)
+        dialog.close()
+
+    def test_portable_extract_smoke_writes_machine_readable_result(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "result.json"
+            document = ExtractedDocument(
+                Path("complex.pdf"),
+                "hash",
+                2,
+                [VocabularyEntry(1, "word", "", "释义", 2)],
+                [],
+                extraction_method="layout",
+            )
+            with patch("word_voice.app.extract_vocabulary_pdf", return_value=document):
+                result = run_portable_extract_smoke(Path("complex.pdf"), output)
+
+            self.assertEqual(0, result)
+            self.assertTrue(output.is_file())
+            self.assertIn('"extraction_method": "layout"', output.read_text(encoding="utf-8"))
+
+    def test_cancelled_import_restores_existing_project_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = VocabularyStore(Path(directory) / "project.sqlite3")
+            document = ExtractedDocument(
+                Path("saved.pdf"),
+                "saved",
+                1,
+                [VocabularyEntry(1, "saved", "", "已保存", 1)],
+                [],
+            )
+            store.import_document(document)
+            window = WordVoiceWindow()
+            window.document = document
+            window.store = store
+            window.pdf_path = Path("new.pdf")
+            window.summary_label.setText("new.pdf")
+
+            window._on_analysis_cancelled("已取消文档分析。")
+
+            self.assertEqual(Path("saved.pdf"), window.pdf_path)
+            self.assertEqual("saved · 1 词", window.summary_label.text())
+            self.assertEqual("已取消文档分析。", window.status_label.text())
+            window.close()
 
     def test_continuous_worker_repeats_advances_and_reads_meaning(self) -> None:
         class FakeService:

@@ -29,3 +29,4 @@
 - [v0.3.x 动漫治愈风主界面](v0.3-anime-healing-ui.md)
 - [v0.4.0 连续学习、个人贴纸与数据保护](v0.4-continuous-learning.md)
 - [v0.5.0 专注学习版主界面](v0.5-focus-learning.md)
+- [v0.6.0 复杂文档导入确认](v0.6-complex-import.md)

@@ -11,6 +11,8 @@ FLAG_LABELS = {
     "duplicate_word": "重复拼写",
     "multiple_pronunciations": "包含多个读音",
     "suspicious_word": "单词格式可疑",
+    "low_confidence": "识别置信度较低",
+    "layout_extracted": "来自复杂版面识别",
 }
 
 
@@ -23,6 +25,9 @@ class VocabularyEntry:
     page: int
     flags: tuple[str, ...] = field(default_factory=tuple)
     pronunciation_override: str = ""
+    confidence: float = 1.0
+    source_bbox: tuple[float, float, float, float] | None = None
+    extraction_method: str = "table"
 
     @property
     def has_issue(self) -> bool:
@@ -55,6 +60,8 @@ class ExtractedDocument:
     page_count: int
     entries: list[VocabularyEntry]
     issues: list[ExtractionIssue]
+    extraction_method: str = "table"
+    requires_review: bool = False
 
     @property
     def min_sequence(self) -> int | None:
@@ -78,5 +85,7 @@ class ExtractedDocument:
             "max_sequence": self.max_sequence,
             "flagged_count": self.flagged_count,
             "extraction_issue_count": len(self.issues),
+            "extraction_method": self.extraction_method,
+            "requires_review": self.requires_review,
         }
 

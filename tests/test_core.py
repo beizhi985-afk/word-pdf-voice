@@ -131,7 +131,7 @@ class StorageTests(unittest.TestCase):
             store = VocabularyStore(database)
 
             self.assertEqual("unrated", store.learning_status(1))
-            self.assertEqual("0.4.0", store.get_metadata("data_version"))
+            self.assertEqual("0.6.0", store.get_metadata("data_version"))
             backups = list_database_backups(ProjectWorkspace.create(Path(directory)))
             self.assertTrue(any("before v040 migration" in item.reason for item in backups))
 
@@ -232,6 +232,70 @@ class StorageTests(unittest.TestCase):
             self.assertIsNotNone(saved)
             self.assertEqual("corrected", saved.word)
             self.assertEqual("已修正", saved.meaning)
+
+    def test_layout_metadata_survives_database_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = VocabularyStore(Path(directory) / "test.sqlite3")
+            document = ExtractedDocument(
+                source_path=Path("complex.pdf"),
+                source_hash="layout-hash",
+                page_count=2,
+                entries=[
+                    VocabularyEntry(
+                        1,
+                        "take notes",
+                        "",
+                        "做笔记",
+                        2,
+                        ("missing_phonetic",),
+                        confidence=0.82,
+                        source_bbox=(36.0, 40.0, 180.0, 54.0),
+                        extraction_method="layout",
+                    )
+                ],
+                issues=[],
+                extraction_method="layout",
+            )
+
+            store.import_document(document)
+            saved = store.get_entry(1)
+
+            self.assertIsNotNone(saved)
+            self.assertEqual(0.82, saved.confidence)
+            self.assertEqual((36.0, 40.0, 180.0, 54.0), saved.source_bbox)
+            self.assertEqual("layout", saved.extraction_method)
+            self.assertEqual("layout", store.get_metadata("extraction_method"))
+
+    def test_confirmed_reimport_removes_tail_and_invalidates_changed_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = VocabularyStore(root / "test.sqlite3")
+            store.import_document(
+                ExtractedDocument(
+                    Path("sample.pdf"),
+                    "before",
+                    1,
+                    [entry(1, "old"), entry(2, "removed")],
+                    [],
+                )
+            )
+            audio = root / "old.wav"
+            audio.write_bytes(b"audio")
+            store.mark_audio_ready(1, audio)
+
+            store.import_document(
+                ExtractedDocument(
+                    Path("sample.pdf"),
+                    "after",
+                    1,
+                    [entry(1, "changed")],
+                    [],
+                )
+            )
+
+            self.assertEqual(1, store.entry_count())
+            self.assertIsNone(store.get_entry(2))
+            self.assertEqual(("missing", "", ""), store.audio_record(1))
 
     def test_list_entries_can_show_only_ready_audio(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

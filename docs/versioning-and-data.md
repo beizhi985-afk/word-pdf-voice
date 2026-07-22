@@ -25,6 +25,8 @@ v0.2.1 在原 `entries` 表自动增加 `audio_profile`，继续使用 `%LOCALAP
 
 v0.4.0 在原 `entries` 表自动增加 `learning_status`，值为未标记、认识、模糊或不认识。迁移前先使用 SQLite 在线备份接口保存 `before-v040-migration` 快照，迁移只增加字段，不修改已有词条、人工编辑、音频路径和发音配置。
 
+v0.6.0 在原 `entries` 表增加 `confidence`、`source_bbox_json` 和 `extraction_method`，用于复杂文档预览、来源定位与后续规则改进。迁移前保存 `before-v060-migration` 快照；旧记录使用置信度 1.0 和 `legacy` 解析方式，不改变序号、学习状态、音频路径或人工修改。
+
 ## v0.4.0 备份与恢复
 
 - 每个项目的备份保存在项目目录下的 `backups\`，每天首次打开时自动保存一次。

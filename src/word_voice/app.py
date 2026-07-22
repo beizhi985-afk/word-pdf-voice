@@ -44,8 +44,8 @@ from PySide6.QtWidgets import (
 
 from . import __version__
 from .anki_export import AnkiExportError, export_anki_deck
-from .extractor import extract_vocabulary_pdf
-from .models import VocabularyEntry
+from .extractor import ExtractionCancelled, extract_vocabulary_pdf, write_json
+from .models import ExtractedDocument, VocabularyEntry
 from .samples import select_pronunciation_samples
 from .speech import chinese_voice_available, speak_chinese
 from .storage import (
@@ -283,14 +283,29 @@ def run_portable_tts_smoke(
         return 1
 
 
+def run_portable_extract_smoke(pdf_path: Path, output_path: Path) -> int:
+    error_path = output_path.with_suffix(".error.txt")
+    try:
+        document = extract_vocabulary_pdf(pdf_path)
+        write_json(document, output_path)
+        error_path.unlink(missing_ok=True)
+        return 0
+    except Exception:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        error_path.write_text(traceback.format_exc(), encoding="utf-8")
+        return 1
+
+
 class ExtractionWorker(QObject):
     progress = Signal(int, int, str)
-    finished = Signal(object, object, object, object)
+    finished = Signal(object)
+    cancelled = Signal(str)
     error = Signal(str)
 
-    def __init__(self, pdf_path: Path):
+    def __init__(self, pdf_path: Path, stop_event: threading.Event):
         super().__init__()
         self.pdf_path = pdf_path
+        self.stop_event = stop_event
 
     @Slot()
     def run(self) -> None:
@@ -300,12 +315,11 @@ class ExtractionWorker(QObject):
                 progress=lambda current, total: self.progress.emit(
                     current, total, f"正在分析第 {current}/{total} 页"
                 ),
+                cancelled=self.stop_event.is_set,
             )
-            self.progress.emit(0, 0, "正在准备项目数据...")
-            workspace, migration = prepare_default_workspace(self.pdf_path)
-            store = VocabularyStore(workspace.database_path)
-            store.import_document(document)
-            self.finished.emit(document, workspace, store, migration)
+            self.finished.emit(document)
+        except ExtractionCancelled as exc:
+            self.cancelled.emit(str(exc))
         except Exception as exc:
             self.error.emit(f"文档分析失败：{exc}")
 
@@ -451,6 +465,177 @@ class EntryEditDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addRow(buttons)
+
+
+class ImportPreviewDialog(QDialog):
+    """Review uncertain layout extraction before it reaches the project database."""
+
+    def __init__(self, document: ExtractedDocument, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.document = document
+        self.setWindowTitle("确认复杂文档识别结果")
+        self.resize(1040, 680)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+        title = QLabel("确认后才会加入词库")
+        title.setObjectName("heroTitle")
+        intro = QLabel(
+            f"识别到 {len(document.entries)} 条候选内容，来源为双栏/复杂版面解析。"
+            "请重点检查低置信度项目；手写音标可能无法自动识别。"
+        )
+        intro.setWordWrap(True)
+        intro.setObjectName("muted")
+        layout.addWidget(title)
+        layout.addWidget(intro)
+
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(
+            ("导入", "英文或词组", "音标", "中文释义", "页码", "置信度")
+        )
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Interactive)
+        header.resizeSection(1, 260)
+        header.setSectionResizeMode(2, QHeaderView.Interactive)
+        header.resizeSection(2, 150)
+        header.setSectionResizeMode(3, QHeaderView.Stretch)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        for entry in document.entries:
+            self._append_entry(entry)
+        layout.addWidget(self.table, 1)
+
+        tools = QHBoxLayout()
+        high_confidence = QPushButton("只保留高置信度")
+        high_confidence.clicked.connect(self._keep_high_confidence)
+        select_all = QPushButton("全部选择")
+        select_all.clicked.connect(lambda: self._set_all_checked(True))
+        merge = QPushButton("合并所选行")
+        merge.clicked.connect(self._merge_selected_rows)
+        remove = QPushButton("删除所选行")
+        remove.clicked.connect(self._remove_selected_rows)
+        tools.addWidget(high_confidence)
+        tools.addWidget(select_all)
+        tools.addWidget(merge)
+        tools.addWidget(remove)
+        tools.addStretch()
+        layout.addLayout(tools)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Ok)
+        buttons.button(QDialogButtonBox.Ok).setText("确认并加入词库")
+        buttons.accepted.connect(self._accept_if_valid)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _append_entry(self, entry: VocabularyEntry) -> None:
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        include = QTableWidgetItem("")
+        include.setCheckState(Qt.Checked)
+        include.setData(Qt.UserRole, entry)
+        include.setFlags((include.flags() | Qt.ItemIsUserCheckable) & ~Qt.ItemIsEditable)
+        self.table.setItem(row, 0, include)
+        self.table.setItem(row, 1, QTableWidgetItem(entry.word))
+        self.table.setItem(row, 2, QTableWidgetItem(entry.phonetic))
+        self.table.setItem(row, 3, QTableWidgetItem(entry.meaning))
+        page_item = QTableWidgetItem(str(entry.page))
+        page_item.setFlags(page_item.flags() & ~Qt.ItemIsEditable)
+        self.table.setItem(row, 4, page_item)
+        confidence_item = QTableWidgetItem(f"{entry.confidence:.0%}")
+        confidence_item.setFlags(confidence_item.flags() & ~Qt.ItemIsEditable)
+        if entry.confidence < 0.75:
+            confidence_item.setForeground(QColor("#C65D45"))
+        self.table.setItem(row, 5, confidence_item)
+
+    def _set_all_checked(self, checked: bool) -> None:
+        state = Qt.Checked if checked else Qt.Unchecked
+        for row in range(self.table.rowCount()):
+            self.table.item(row, 0).setCheckState(state)
+
+    def _keep_high_confidence(self) -> None:
+        for row in range(self.table.rowCount()):
+            entry = self.table.item(row, 0).data(Qt.UserRole)
+            self.table.item(row, 0).setCheckState(
+                Qt.Checked if entry.confidence >= 0.75 else Qt.Unchecked
+            )
+
+    def _selected_rows(self) -> list[int]:
+        return sorted({index.row() for index in self.table.selectedIndexes()})
+
+    def _remove_selected_rows(self) -> None:
+        for row in reversed(self._selected_rows()):
+            self.table.removeRow(row)
+
+    def _merge_selected_rows(self) -> None:
+        rows = self._selected_rows()
+        if len(rows) < 2:
+            QMessageBox.information(self, "合并词条", "请先选择至少两行。")
+            return
+        first = self.table.item(rows[0], 0).data(Qt.UserRole)
+        merged = VocabularyEntry(
+            sequence=first.sequence,
+            word=" ".join(self.table.item(row, 1).text().strip() for row in rows).strip(),
+            phonetic=" ".join(self.table.item(row, 2).text().strip() for row in rows).strip(),
+            meaning=" ".join(self.table.item(row, 3).text().strip() for row in rows).strip(),
+            page=min(int(self.table.item(row, 4).text()) for row in rows),
+            flags=first.flags,
+            confidence=min(
+                self.table.item(row, 0).data(Qt.UserRole).confidence for row in rows
+            ),
+            source_bbox=first.source_bbox,
+            extraction_method=first.extraction_method,
+        )
+        for row in reversed(rows):
+            self.table.removeRow(row)
+        self._append_entry(merged)
+        self.table.scrollToBottom()
+
+    def _accept_if_valid(self) -> None:
+        if not any(
+            self.table.item(row, 0).checkState() == Qt.Checked
+            for row in range(self.table.rowCount())
+        ):
+            QMessageBox.warning(self, "没有可导入内容", "请至少保留一条内容。")
+            return
+        self.accept()
+
+    def reviewed_document(self) -> ExtractedDocument:
+        entries: list[VocabularyEntry] = []
+        for row in range(self.table.rowCount()):
+            include = self.table.item(row, 0)
+            if include.checkState() != Qt.Checked:
+                continue
+            source = include.data(Qt.UserRole)
+            entries.append(
+                VocabularyEntry(
+                    sequence=source.sequence,
+                    word=self.table.item(row, 1).text().strip(),
+                    phonetic=self.table.item(row, 2).text().strip(),
+                    meaning=self.table.item(row, 3).text().strip(),
+                    page=int(self.table.item(row, 4).text()),
+                    flags=source.flags,
+                    pronunciation_override=source.pronunciation_override,
+                    confidence=source.confidence,
+                    source_bbox=source.source_bbox,
+                    extraction_method=source.extraction_method,
+                )
+            )
+        if self.document.extraction_method == "layout":
+            for sequence, entry in enumerate(entries, start=1):
+                entry.sequence = sequence
+        return ExtractedDocument(
+            source_path=self.document.source_path,
+            source_hash=self.document.source_hash,
+            page_count=self.document.page_count,
+            entries=entries,
+            issues=self.document.issues,
+            extraction_method=self.document.extraction_method,
+            requires_review=False,
+        )
 
 
 class BackupDialog(QDialog):
@@ -705,7 +890,7 @@ class WordVoiceWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"单词文档配音 v{__version__}")
-        # Keep the compact v0.5 layout usable on 1280×800 displays at 125% scaling.
+        # Keep the compact v0.6 layout usable on 1280×800 displays at 125% scaling.
         self.resize(1180, 760)
         self.setMinimumSize(980, 620)
         self.pdf_path: Path | None = None
@@ -714,6 +899,7 @@ class WordVoiceWindow(QMainWindow):
         self.store: VocabularyStore | None = None
         self.stop_event = threading.Event()
         self.playback_stop_event = threading.Event()
+        self.analysis_stop_event = threading.Event()
         self._continuous_running = False
         self._threads: list[QThread] = []
         self._active_workers: dict[QThread, QObject] = {}
@@ -828,7 +1014,7 @@ class WordVoiceWindow(QMainWindow):
         title_layout.setSpacing(8)
         app_title = QLabel("单词文档配音")
         app_title.setObjectName("appTitle")
-        version = QLabel(f"v{__version__} · 专注学习版")
+        version = QLabel(f"v{__version__} · 智能解析版")
         version.setObjectName("versionLabel")
         title_layout.addWidget(app_title)
         title_layout.addWidget(version)
@@ -1013,8 +1199,12 @@ class WordVoiceWindow(QMainWindow):
         self.progress.setTextVisible(False)
         self.status_label = QLabel(self.opening_phrase)
         self.status_label.setObjectName("muted")
+        self.cancel_analysis_button = QPushButton("取消分析")
+        self.cancel_analysis_button.setVisible(False)
+        self.cancel_analysis_button.clicked.connect(self.cancel_analysis)
         status_row.addWidget(self.progress, 1)
         status_row.addWidget(self.status_label)
+        status_row.addWidget(self.cancel_analysis_button)
         player_layout.addLayout(status_row)
         root.addWidget(player)
         self.voice.currentIndexChanged.connect(self._on_tts_settings_changed)
@@ -1247,24 +1437,58 @@ class WordVoiceWindow(QMainWindow):
         self.summary_meta.setText("正在认识这份词汇，请稍等一下…")
         self.status_label.setText("正在分析文档...")
         self.progress.setValue(0)
-        worker = ExtractionWorker(self.pdf_path)
+        self.analysis_stop_event.clear()
+        self.cancel_analysis_button.setVisible(True)
+        worker = ExtractionWorker(self.pdf_path, self.analysis_stop_event)
         worker.progress.connect(self._on_progress)
         worker.finished.connect(self._on_document)
+        worker.cancelled.connect(self._on_analysis_cancelled)
         worker.error.connect(self._on_extraction_error)
-        self._start_worker(worker, worker.run, (worker.finished, worker.error))
+        self._start_worker(
+            worker,
+            worker.run,
+            (worker.finished, worker.cancelled, worker.error),
+        )
+
+    @Slot()
+    def cancel_analysis(self) -> None:
+        self.analysis_stop_event.set()
+        self.cancel_analysis_button.setEnabled(False)
+        self.status_label.setText("正在安全取消分析…")
 
     @Slot(int, int, str)
     def _on_progress(self, current: int, total: int, message: str) -> None:
         self.progress.setValue(int(current / total * 100) if total else 0)
         self.status_label.setText(message)
 
-    @Slot(object, object, object, object)
-    def _on_document(self, document, workspace, store, migration) -> None:
-        self._activate_document(document, workspace, store)
-        if migration.performed:
-            self.status_label.setText(f"已从 v0.1 复制 {migration.copied_audio} 条音频到 v0.2")
-        else:
-            self.status_label.setText("文档分析完成")
+    @Slot(object)
+    def _on_document(self, document: ExtractedDocument) -> None:
+        self.cancel_analysis_button.setVisible(False)
+        self.cancel_analysis_button.setEnabled(True)
+        if document.requires_review:
+            self.status_label.setText("请确认复杂文档识别结果")
+            preview = ImportPreviewDialog(document, self)
+            if preview.exec() != QDialog.Accepted:
+                self._restore_after_cancelled_import()
+                self.status_label.setText("已取消导入，词库没有发生变化")
+                return
+            document = preview.reviewed_document()
+        try:
+            self.status_label.setText("正在保存确认后的词条…")
+            workspace, migration = prepare_default_workspace(document.source_path)
+            store = VocabularyStore(workspace.database_path)
+            store.import_document(document)
+            self._activate_document(document, workspace, store)
+            if migration.performed:
+                self.status_label.setText(
+                    f"已从 v0.1 复制 {migration.copied_audio} 条音频到 v0.2"
+                )
+            elif document.extraction_method == "layout":
+                self.status_label.setText("复杂文档已确认并加入词库")
+            else:
+                self.status_label.setText("文档分析完成")
+        except Exception as exc:
+            self._on_extraction_error(f"保存识别结果失败：{exc}")
 
     def _activate_document(self, document, workspace, store) -> None:
         self.document = document
@@ -1292,9 +1516,29 @@ class WordVoiceWindow(QMainWindow):
 
     @Slot(str)
     def _on_extraction_error(self, message: str) -> None:
-        self.choose_button.setEnabled(True)
-        self.progress.setValue(0)
+        self._restore_after_cancelled_import()
         self._show_error(message)
+
+    @Slot(str)
+    def _on_analysis_cancelled(self, message: str) -> None:
+        self._restore_after_cancelled_import()
+        self.status_label.setText(message or "已取消文档分析")
+
+    def _restore_after_cancelled_import(self) -> None:
+        self.choose_button.setEnabled(True)
+        self.cancel_analysis_button.setVisible(False)
+        self.cancel_analysis_button.setEnabled(True)
+        self.progress.setValue(0)
+        if self.document is not None and self.store is not None:
+            self.pdf_path = self.document.source_path
+            self._refresh_summary()
+            self.refresh_table()
+        else:
+            self.pdf_path = None
+            self.summary_label.setText("还没有选择词汇")
+            self.summary_label.setToolTip("")
+            self.summary_meta.setText("")
+            self.table_count_label.setText("显示 0 条")
 
     @Slot()
     def refresh_table(self) -> None:
@@ -1633,6 +1877,14 @@ class WordVoiceWindow(QMainWindow):
 
 def main() -> int:
     arguments = sys.argv[1:]
+    if "--smoke-extract" in arguments:
+        argument_index = arguments.index("--smoke-extract")
+        if argument_index + 2 >= len(arguments):
+            return 2
+        return run_portable_extract_smoke(
+            Path(arguments[argument_index + 1]),
+            Path(arguments[argument_index + 2]),
+        )
     if "--smoke-tts" in arguments:
         argument_index = arguments.index("--smoke-tts")
         if argument_index + 1 >= len(arguments):

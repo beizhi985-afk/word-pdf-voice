@@ -67,7 +67,7 @@ class DatabaseBackup:
         return datetime.fromtimestamp(self.created_at).strftime("%Y-%m-%d %H:%M:%S")
 
 
-DATA_VERSION = "0.4.0"
+DATA_VERSION = "0.6.0"
 LEARNING_STATUSES = ("unrated", "known", "unsure", "unknown")
 
 
@@ -248,6 +248,8 @@ def open_imported_project(
         page_count=project.page_count,
         entries=store.list_entries(),
         issues=[],
+        extraction_method=store.get_metadata("extraction_method", "legacy"),
+        requires_review=False,
     )
     return document, workspace, store
 
@@ -314,6 +316,12 @@ class VocabularyStore:
                 "before-v040-migration",
                 once_per_day=True,
             )
+        elif self.database_path.is_file() and self._needs_v060_migration():
+            create_database_backup(
+                self.database_path,
+                "before-v060-migration",
+                once_per_day=True,
+            )
         self._initialize()
         if self.entry_count():
             create_database_backup(
@@ -362,7 +370,10 @@ class VocabularyStore:
                     audio_path TEXT NOT NULL DEFAULT '',
                     audio_error TEXT NOT NULL DEFAULT '',
                     audio_profile TEXT NOT NULL DEFAULT '',
-                    learning_status TEXT NOT NULL DEFAULT 'unrated'
+                    learning_status TEXT NOT NULL DEFAULT 'unrated',
+                    confidence REAL NOT NULL DEFAULT 1.0,
+                    source_bbox_json TEXT NOT NULL DEFAULT '',
+                    extraction_method TEXT NOT NULL DEFAULT 'legacy'
                 );
                 """
             )
@@ -376,6 +387,18 @@ class VocabularyStore:
             if "learning_status" not in columns:
                 connection.execute(
                     "ALTER TABLE entries ADD COLUMN learning_status TEXT NOT NULL DEFAULT 'unrated'"
+                )
+            if "confidence" not in columns:
+                connection.execute(
+                    "ALTER TABLE entries ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0"
+                )
+            if "source_bbox_json" not in columns:
+                connection.execute(
+                    "ALTER TABLE entries ADD COLUMN source_bbox_json TEXT NOT NULL DEFAULT ''"
+                )
+            if "extraction_method" not in columns:
+                connection.execute(
+                    "ALTER TABLE entries ADD COLUMN extraction_method TEXT NOT NULL DEFAULT 'legacy'"
                 )
             connection.execute(
                 "INSERT INTO metadata(key, value) VALUES('data_version', ?) "
@@ -398,6 +421,24 @@ class VocabularyStore:
                     row[1] for row in connection.execute("PRAGMA table_info(entries)").fetchall()
                 }
             return "learning_status" not in columns
+        except sqlite3.Error:
+            return False
+
+    def _needs_v060_migration(self) -> bool:
+        try:
+            with closing(sqlite3.connect(self.database_path)) as connection:
+                tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                }
+                if "entries" not in tables:
+                    return False
+                columns = {
+                    row[1] for row in connection.execute("PRAGMA table_info(entries)").fetchall()
+                }
+            return not {"confidence", "source_bbox_json", "extraction_method"}.issubset(columns)
         except sqlite3.Error:
             return False
 
@@ -437,13 +478,19 @@ class VocabularyStore:
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (str(document.page_count),),
             )
+            connection.execute(
+                "INSERT INTO metadata(key, value) VALUES('extraction_method', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (document.extraction_method,),
+            )
             for entry in document.entries:
                 connection.execute(
                     """
                     INSERT INTO entries(
                         sequence, source_word, source_phonetic, source_meaning,
-                        word, phonetic, meaning, page, flags_json, pronunciation_override
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        word, phonetic, meaning, page, flags_json, pronunciation_override,
+                        confidence, source_bbox_json, extraction_method
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(sequence) DO UPDATE SET
                         source_word=excluded.source_word,
                         source_phonetic=excluded.source_phonetic,
@@ -452,7 +499,26 @@ class VocabularyStore:
                         phonetic=CASE WHEN entries.manually_edited=0 THEN excluded.phonetic ELSE entries.phonetic END,
                         meaning=CASE WHEN entries.manually_edited=0 THEN excluded.meaning ELSE entries.meaning END,
                         page=excluded.page,
-                        flags_json=excluded.flags_json
+                        flags_json=excluded.flags_json,
+                        confidence=excluded.confidence,
+                        source_bbox_json=excluded.source_bbox_json,
+                        extraction_method=excluded.extraction_method,
+                        audio_status=CASE
+                            WHEN entries.source_word<>excluded.source_word THEN 'missing'
+                            ELSE entries.audio_status
+                        END,
+                        audio_path=CASE
+                            WHEN entries.source_word<>excluded.source_word THEN ''
+                            ELSE entries.audio_path
+                        END,
+                        audio_error=CASE
+                            WHEN entries.source_word<>excluded.source_word THEN ''
+                            ELSE entries.audio_error
+                        END,
+                        audio_profile=CASE
+                            WHEN entries.source_word<>excluded.source_word THEN ''
+                            ELSE entries.audio_profile
+                        END
                     """,
                     (
                         entry.sequence,
@@ -465,11 +531,23 @@ class VocabularyStore:
                         entry.page,
                         json.dumps(list(entry.flags), ensure_ascii=False),
                         entry.pronunciation_override,
+                        entry.confidence,
+                        json.dumps(entry.source_bbox) if entry.source_bbox else "",
+                        entry.extraction_method,
                     ),
+                )
+            if document.entries:
+                minimum = min(entry.sequence for entry in document.entries)
+                maximum = max(entry.sequence for entry in document.entries)
+                connection.execute(
+                    "DELETE FROM entries WHERE sequence < ? OR sequence > ?",
+                    (minimum, maximum),
                 )
 
     @staticmethod
     def _row_to_entry(row: sqlite3.Row) -> VocabularyEntry:
+        bbox_value = row["source_bbox_json"] if "source_bbox_json" in row.keys() else ""
+        bbox = tuple(json.loads(bbox_value)) if bbox_value else None
         return VocabularyEntry(
             sequence=row["sequence"],
             word=row["word"],
@@ -478,6 +556,13 @@ class VocabularyStore:
             page=row["page"],
             flags=tuple(json.loads(row["flags_json"])),
             pronunciation_override=row["pronunciation_override"],
+            confidence=float(row["confidence"]) if "confidence" in row.keys() else 1.0,
+            source_bbox=bbox,
+            extraction_method=(
+                str(row["extraction_method"])
+                if "extraction_method" in row.keys()
+                else "legacy"
+            ),
         )
 
     def list_entries(
