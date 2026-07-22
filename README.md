@@ -20,7 +20,7 @@
 
 ## 当前状态
 
-v0.4.0 可以从任意选中单词开始连续播放，设置重复 1—5 次、词间暂停以及“只听英文”或“英文＋中文释义”。每个词可标记为认识、模糊或不认识，下次使用“重点复习”集中学习。公开版内置五枚原创贴纸并支持用户添加本地图片；数据库自动备份、兼容旧版本并可从历史备份恢复。
+v0.5.0 使用专注学习版界面：主页面只保留词汇选择、筛选、四列词表和底部播放器，低频功能收纳到更多菜单与学习设置中。连续播放、重复与暂停、中英文模式、熟悉度标记、原创贴纸、Anki、音频生成和数据库备份恢复均完整保留，并直接兼容旧数据。
 
 ## 项目笔记导航
 
@@ -28,7 +28,7 @@ v0.4.0 可以从任意选中单词开始连续播放，设置重复 1—5 次、
 
 - [[单词文档配音-完整方案]]：产品范围、架构、流程、验收和后续计划。
 - [[单词文档配音方案文档索引]]：所有规格、方案、场景和开发经验的统一入口。
-- [[单词文档配音项目交接文档-2026-07-19]]：v0.4.0 基线、数据保护、运行路径和验证结果。
+- [[单词文档配音项目交接文档-2026-07-22]]：v0.5.0 专注界面、兼容边界、验证与发布结果。
 - [[更新日志]]：按日期记录用户可感知的新增、修复和仓库调整。
 
 完整产品定义见 [`docs/product-brief.md`](docs/product-brief.md)。当前版本目标、范围和交付标准见 [`spec/current.md`](spec/current.md)。项目目标与约束见 [`docs/goals-and-constraints.md`](docs/goals-and-constraints.md)。
@@ -66,13 +66,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
 ```
 
-v0.4.0 构建结果位于 `dist\WordPdfVoice-v0.4.0\WordPdfVoice-v0.4.0.exe`。整个版本文件夹需要一起保留；构建前会检查源码、配置和正式文件名的版本号是否一致。
+v0.5.0 构建结果位于 `dist\WordPdfVoice-v0.5.0\WordPdfVoice-v0.5.0.exe`。整个版本文件夹需要一起保留；构建前会检查源码、配置和正式文件名的版本号是否一致。
 
 构建结束会自动调用成品程序生成 Sarah、Adam、慢速和快速真实 WAV；声音或语速没有产生实际差异时，构建会直接失败。
 
 当前便携版约 367 MB，包含离线发音模型，因此首次使用和日常发音都不依赖网络。
 
-v0.2 以来的项目数据继续保存在 `%LOCALAPPDATA%\WordPdfVoice\v0.2\projects\`。v0.4.0 首次打开旧项目时先备份再增加学习状态字段，每天首次打开也会自动备份；具体约定见 [`docs/versioning-and-data.md`](docs/versioning-and-data.md)。
+v0.2 以来的项目数据继续保存在 `%LOCALAPPDATA%\WordPdfVoice\v0.2\projects\`。v0.5.0 不修改 v0.4.0 数据结构，旧项目无需重新导入；每天首次打开仍会自动备份，具体约定见 [`docs/versioning-and-data.md`](docs/versioning-and-data.md)。
 
 只运行 PDF 提取：
 

@@ -6,7 +6,7 @@
 
 - `setup.ps1`：创建虚拟环境、安装依赖并准备本地语音模型。
 - `setup_models.py`：从 Kokoro ONNX 官方发布页下载量化模型与声音数据。
-- `build.ps1`：先检查版本一致性，再构建包含 Python、Qt、本地语音模型、原创 UI 贴纸和小书图标的 `WordPdfVoice-v0.4.0` Windows 独立运行文件夹。
+- `build.ps1`：先检查版本一致性，再构建包含 Python、Qt、本地语音模型、原创 UI 贴纸和小书图标的 `WordPdfVoice-v0.5.0` Windows 独立运行文件夹。
 - `verify_version.py`：确认源码、`pyproject.toml`、PyInstaller 名称和构建结果使用同一个版本号。
 - `verify_portable.py`：调用成品程序生成不同声音、慢速和快速真实 WAV，检查冻结版资源及语音参数是否有效。
 - `run_app.py`：启动 Windows 桌面界面。

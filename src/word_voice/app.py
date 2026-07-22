@@ -10,7 +10,7 @@ import traceback
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QIcon, QImage, QPixmap
+from PySide6.QtGui import QAction, QColor, QIcon, QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -32,10 +32,12 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QMenu,
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -63,58 +65,55 @@ from .tts import AudioService, KokoroOnnxEngine, TtsConfig
 
 
 APP_STYLE = """
-QWidget { color: #4b4052; font-family: "Microsoft YaHei UI"; font-size: 13px; }
-QWidget#page { background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-    stop:0 #fff8f2, stop:0.48 #fffdf9, stop:1 #f8f1ff); }
+QWidget { color: #3a3042; font-family: "Microsoft YaHei UI"; font-size: 13px; }
+QWidget#page { background: #fffaf6; }
 QLabel { background: transparent; }
-QFrame#heroCard { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-    stop:0 #fff0e7, stop:0.55 #fff7ed, stop:1 #f2eaff);
-    border: 1px solid #efd9d5; border-radius: 24px; }
-QFrame#card, QFrame#summaryCard, QFrame#tableCard, QFrame#statusCard {
-    background: rgba(255, 255, 255, 238); border: 1px solid #eadfe7; border-radius: 17px; }
-QFrame#phraseBubble { background: rgba(255, 255, 255, 205); border: 1px solid #f2d8cf;
-    border-radius: 13px; }
-QFrame#metricCoral { background: #fff0e8; border: 1px solid #f6d4c5; border-radius: 12px; }
-QFrame#metricLilac { background: #f4eeff; border: 1px solid #ddd0f4; border-radius: 12px; }
-QFrame#metricMint { background: #ecf8f1; border: 1px solid #cce9d9; border-radius: 12px; }
-QFrame#metricSun { background: #fff8df; border: 1px solid #f1dfaa; border-radius: 12px; }
-QLabel#eyebrow { color: #a65f78; background: #fff9f5; border: 1px solid #f1d8d0;
-    border-radius: 10px; padding: 4px 10px; font-size: 11px; font-weight: 700; }
-QLabel#heroTitle { color: #493949; font-size: 28px; font-weight: 800; }
-QLabel#heroSubtitle { color: #806e7c; font-size: 13px; }
-QLabel#phraseMark { color: #e88379; font-size: 18px; font-weight: 800; }
-QLabel#phraseText { color: #6d5668; font-size: 13px; font-weight: 600; }
-QLabel#sectionTitle { color: #574657; font-size: 15px; font-weight: 800; }
-QLabel#documentTitle { color: #514351; font-size: 14px; font-weight: 700; }
-QLabel#muted, QLabel#documentMeta, QLabel#tableCount { color: #8a7887; }
-QLabel#metricValue { color: #4f414f; font-size: 18px; font-weight: 800; }
-QLabel#metricLabel { color: #8b7987; font-size: 11px; }
-QPushButton { background: #fffdfc; border: 1px solid #dfd0d9; border-radius: 10px;
-    padding: 8px 13px; font-weight: 600; }
-QPushButton:hover { background: #fff4ef; border-color: #d8aeb8; }
+QFrame#topBar { background: #fffefd; border-bottom: 1px solid #eee3df; }
+QFrame#filterBar { background: #fffefd; border: 1px solid #eee3df; border-radius: 14px; }
+QFrame#tableCard { background: #fffefd; border: 1px solid #eee6e2; border-radius: 14px; }
+QFrame#playerBar { background: #fffefd; border: 1px solid #eadbd6; border-radius: 18px; }
+QFrame#card, QFrame#summaryCard, QFrame#statusCard { background: #fffefd; border: 1px solid #eee3df; border-radius: 14px; }
+QLabel#appTitle { color: #332a3b; font-size: 20px; font-weight: 800; }
+QLabel#versionLabel { color: #9a8c99; font-size: 12px; font-weight: 600; }
+QLabel#documentSummary { color: #514351; font-size: 15px; font-weight: 800; }
+QLabel#heroTitle { color: #493949; font-size: 22px; font-weight: 800; }
+QLabel#sectionTitle { color: #574657; font-size: 14px; font-weight: 800; }
+QLabel#tableCount, QLabel#muted, QLabel#documentMeta { color: #8a7887; }
+QLabel#playerWord { color: #332a3b; font-size: 26px; font-weight: 800; }
+QLabel#playerPhonetic { color: #786a79; font-size: 13px; }
+QLabel#playerMeaning { color: #5d4d5c; font-size: 14px; font-weight: 600; }
+QPushButton { background: #fffefd; border: 1px solid #dfd3d2; border-radius: 10px; padding: 8px 13px; font-weight: 700; }
+QPushButton:hover { background: #fff4ef; border-color: #d9aba8; }
 QPushButton:pressed { background: #f8e8e4; }
 QPushButton:disabled { color: #b8aeb5; background: #f5f1f3; border-color: #e8e1e5; }
-QPushButton[kind="primary"] { color: white; background: #e9837e; border: none; font-weight: 800; }
-QPushButton[kind="primary"]:hover { background: #d97170; }
-QPushButton[kind="lavender"] { color: #654f83; background: #f1e9ff; border-color: #d7c6ef; }
-QPushButton[kind="lavender"]:hover { background: #e8dcfa; }
-QPushButton[kind="mint"] { color: #46735f; background: #eaf7ef; border-color: #c6e4d2; }
-QPushButton[kind="sun"] { color: #826a32; background: #fff6d9; border-color: #ecd998; }
+QPushButton[kind="primary"] { color: white; background: #e97878; border: none; font-weight: 800; }
+QPushButton[kind="primary"]:hover { background: #d96b6c; }
+QPushButton#continuousPlayButton { color: white; background: #e97878; border: none; border-radius: 30px; padding: 0; font-size: 22px; font-weight: 800; }
+QPushButton#continuousPlayButton:hover { background: #db6d6d; }
+QPushButton#continuousPlayButton:pressed { background: #cc6264; }
+QPushButton[kind="transport"] { color: #514657; background: transparent; border: none; border-radius: 21px; padding: 0; font-size: 19px; font-weight: 800; }
+QPushButton[kind="transport"]:hover { background: #fff0ec; }
+QPushButton[kind="chip"] { color: #6c5e6c; background: #fffefd; border-color: #eadfe4; border-radius: 17px; padding: 7px 15px; }
+QPushButton[kind="chip"]:checked { color: #a7585e; background: #fff0ec; border-color: #efc0ba; }
+QPushButton[kind="mint"] { color: #367d61; background: #effaf4; border-color: #a9ddc4; }
+QPushButton[kind="sun"] { color: #ad751d; background: #fff8e9; border-color: #f2ce83; }
+QPushButton[kind="danger"] { color: #c65e65; background: #fff4f2; border-color: #f2aaa6; }
 QPushButton[kind="ghost"] { color: #a16f81; background: transparent; border: none; padding: 4px 7px; }
-QLineEdit, QComboBox, QDoubleSpinBox, QTextEdit { background: #fffdfc; border: 1px solid #dfd1da;
-    border-radius: 9px; padding: 7px 9px; selection-background-color: #f4c6c0; }
+QToolButton { background: #fffefd; border: 1px solid #e5d9d8; border-radius: 10px; padding: 7px 10px; font-weight: 800; }
+QToolButton:hover { background: #fff4ef; border-color: #d9aba8; }
+QToolButton#moreButton { font-size: 20px; padding: 2px 12px 7px; }
+QLineEdit, QComboBox, QDoubleSpinBox, QTextEdit { background: #fffefd; border: 1px solid #dfd3d2; border-radius: 10px; padding: 8px 10px; selection-background-color: #f4c6c0; }
 QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus, QTextEdit:focus { border: 1px solid #dc908f; }
-QCheckBox { spacing: 7px; color: #6d5e6b; }
-QListWidget { background: #fffdfc; border: 1px solid #eadde5; border-radius: 12px; outline: none; }
+QMenu { background: #fffefd; border: 1px solid #e6dcd9; border-radius: 10px; padding: 6px; }
+QMenu::item { padding: 8px 26px 8px 10px; border-radius: 6px; }
+QMenu::item:selected { background: #fff0ec; }
+QListWidget { background: #fffefd; border: 1px solid #eadde5; border-radius: 12px; outline: none; }
 QListWidget::item { padding: 11px 12px; border-bottom: 1px solid #f0e7ec; }
 QListWidget::item:selected { color: #493d49; background: #ffe9e2; }
-QTableWidget { background: #fffefd; alternate-background-color: #fffaf7; border: none;
-    gridline-color: #f0e7ec; selection-background-color: #ffe9e2; selection-color: #493d49; }
-QHeaderView::section { color: #675568; background: #f8eff5; border: none;
-    border-bottom: 1px solid #e7d9e2; padding: 9px; font-weight: 800; }
-QProgressBar { background: #eee5eb; border: none; border-radius: 5px; height: 9px; text-align: center; }
-QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-    stop:0 #ee978c, stop:1 #b79add); border-radius: 5px; }
+QTableWidget { background: #fffefd; alternate-background-color: #fffaf7; border: none; gridline-color: #f0e8e4; selection-background-color: #ffe9e2; selection-color: #493d49; }
+QHeaderView::section { color: #625466; background: #fff7f3; border: none; border-bottom: 1px solid #ebdfda; padding: 10px; font-weight: 800; }
+QProgressBar { background: #f0e7e4; border: none; border-radius: 4px; height: 6px; text-align: center; }
+QProgressBar::chunk { background: #e97878; border-radius: 4px; }
 """
 
 
@@ -706,9 +705,9 @@ class WordVoiceWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"单词文档配音 v{__version__}")
-        # Keep the first launch usable on 1280×800 displays running at 125% scaling.
-        self.resize(1000, 680)
-        self.setMinimumSize(900, 600)
+        # Keep the compact v0.5 layout usable on 1280×800 displays at 125% scaling.
+        self.resize(1180, 760)
+        self.setMinimumSize(980, 620)
         self.pdf_path: Path | None = None
         self.document = None
         self.workspace: ProjectWorkspace | None = None
@@ -799,139 +798,244 @@ class WordVoiceWindow(QMainWindow):
     def rotate_phrase(self) -> None:
         self.opening_phrase = choose_rotating_value(HEALING_PHRASES, self.opening_phrase)
         self._settings.setValue("ui/last_phrase", self.opening_phrase)
-        self.phrase_label.setText(self.opening_phrase)
+        self.status_label.setText(self.opening_phrase)
 
     def _build_ui(self) -> None:
+        self._build_learning_settings_dialog()
         central = QWidget()
         central.setObjectName("page")
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(22, 18, 22, 18)
-        root.setSpacing(11)
+        root.setContentsMargins(18, 14, 18, 14)
+        root.setSpacing(9)
 
-        hero = self._card("heroCard", shadow=True)
-        hero.setFixedHeight(160)
-        hero_layout = QHBoxLayout(hero)
-        hero_layout.setContentsMargins(24, 15, 20, 15)
-        hero_layout.setSpacing(16)
-        hero_copy = QVBoxLayout()
-        hero_copy.setSpacing(5)
-        badge = QLabel(f"VOCAB VOICE · v{__version__}")
-        badge.setObjectName("eyebrow")
-        badge.setMaximumWidth(158)
-        hero_copy.addWidget(badge, 0, Qt.AlignLeft)
-        title = QLabel("把单词，变成会说话的小伙伴")
-        title.setObjectName("heroTitle")
-        subtitle = QLabel("选择词汇 · 连续学习 · 熟悉度标记 · 导出 Anki")
-        subtitle.setObjectName("heroSubtitle")
-        hero_copy.addWidget(title)
-        hero_copy.addWidget(subtitle)
-        phrase_bubble = self._card("phraseBubble")
-        phrase_layout = QHBoxLayout(phrase_bubble)
-        phrase_layout.setContentsMargins(11, 5, 8, 5)
-        phrase_layout.setSpacing(7)
-        phrase_mark = QLabel("♡")
-        phrase_mark.setObjectName("phraseMark")
-        self.phrase_label = QLabel(self.opening_phrase)
-        self.phrase_label.setObjectName("phraseText")
-        self.phrase_label.setMinimumWidth(0)
-        self.phrase_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        self.phrase_button = QPushButton("换一句")
-        self.phrase_button.setProperty("kind", "ghost")
-        self.phrase_button.clicked.connect(self.rotate_phrase)
-        phrase_layout.addWidget(phrase_mark)
-        phrase_layout.addWidget(self.phrase_label, 1)
-        phrase_layout.addWidget(self.phrase_button)
-        hero_copy.addWidget(phrase_bubble)
-        hero_layout.addLayout(hero_copy, 1)
-
-        hero_side = QVBoxLayout()
-        hero_side.setSpacing(3)
-        hero_side.setAlignment(Qt.AlignCenter)
-        self.sticker_label = QLabel()
-        self.sticker_label.setFixedSize(154, 66)
-        self.sticker_label.setAlignment(Qt.AlignCenter)
-        hero_side.addWidget(self.sticker_label, 0, Qt.AlignCenter)
-        sticker_actions = QHBoxLayout()
-        sticker_actions.setSpacing(2)
-        self.sticker_button = QPushButton("换贴纸")
-        self.sticker_button.setProperty("kind", "ghost")
-        self.sticker_button.clicked.connect(self.rotate_sticker)
-        manage_sticker_button = QPushButton("＋我的贴纸")
-        manage_sticker_button.setProperty("kind", "ghost")
-        manage_sticker_button.clicked.connect(self.manage_stickers)
-        sticker_actions.addWidget(self.sticker_button)
-        sticker_actions.addWidget(manage_sticker_button)
-        hero_side.addLayout(sticker_actions)
+        top_bar = QFrame()
+        top_bar.setObjectName("topBar")
+        top_bar.setFixedHeight(62)
+        top_layout = QHBoxLayout(top_bar)
+        top_layout.setContentsMargins(12, 8, 12, 8)
+        top_layout.setSpacing(10)
+        self.header_icon = QLabel()
+        self.header_icon.setFixedSize(38, 38)
+        self.header_icon.setAlignment(Qt.AlignCenter)
+        icon_path = bundled_ui_asset_path("app-icon.png")
+        if icon_path is not None:
+            self.header_icon.setPixmap(
+                QPixmap(str(icon_path)).scaled(34, 34, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            )
+        top_layout.addWidget(self.header_icon)
+        title_layout = QHBoxLayout()
+        title_layout.setSpacing(8)
+        app_title = QLabel("单词文档配音")
+        app_title.setObjectName("appTitle")
+        version = QLabel(f"v{__version__} · 专注学习版")
+        version.setObjectName("versionLabel")
+        title_layout.addWidget(app_title)
+        title_layout.addWidget(version)
+        top_layout.addLayout(title_layout)
+        top_layout.addStretch()
+        self.summary_label = QLabel("还没有选择词汇")
+        self.summary_label.setObjectName("documentSummary")
+        self.summary_label.setAlignment(Qt.AlignCenter)
+        self.summary_label.setMinimumWidth(250)
+        self.summary_meta = QLabel("")
+        self.summary_meta.setVisible(False)
+        top_layout.addWidget(self.summary_label, 1)
+        top_layout.addStretch()
         self.choose_button = QPushButton("选择词汇")
         self.choose_button.setProperty("kind", "primary")
-        self.choose_button.setFixedSize(154, 34)
+        self.choose_button.setFixedSize(116, 38)
         self.choose_button.clicked.connect(self.choose_vocabulary)
-        hero_side.addWidget(self.choose_button, 0, Qt.AlignCenter)
-        hero_layout.addLayout(hero_side)
+        top_layout.addWidget(self.choose_button)
+        self.more_button = QToolButton()
+        self.more_button.setObjectName("moreButton")
+        self.more_button.setText("⋮")
+        self.more_button.setToolTip("更多功能")
+        self.more_button.setPopupMode(QToolButton.InstantPopup)
+        top_layout.addWidget(self.more_button)
+        self.sticker_label = QLabel()
+        self.sticker_label.setFixedSize(46, 46)
+        self.sticker_label.setAlignment(Qt.AlignCenter)
+        top_layout.addWidget(self.sticker_label)
         self._set_sticker()
-        root.addWidget(hero)
+        root.addWidget(top_bar)
 
-        summary_card = self._card("summaryCard")
-        summary_layout = QHBoxLayout(summary_card)
-        summary_layout.setContentsMargins(17, 9, 14, 9)
-        summary_copy = QVBoxLayout()
-        summary_copy.setSpacing(2)
-        summary_title = QLabel("当前学习文档")
-        summary_title.setObjectName("sectionTitle")
-        self.summary_label = QLabel("还没有选择词汇 PDF")
-        self.summary_label.setObjectName("documentTitle")
-        self.summary_meta = QLabel("点击右上角“选择词汇”，打开已有内容或导入新的 PDF")
-        self.summary_meta.setObjectName("documentMeta")
-        summary_copy.addWidget(summary_title)
-        summary_copy.addWidget(self.summary_label)
-        summary_copy.addWidget(self.summary_meta)
-        summary_layout.addLayout(summary_copy, 1)
-        page_chip, self.page_metric = self._metric_chip("页数", "metricLilac")
-        entry_chip, self.entry_metric = self._metric_chip("词条", "metricCoral")
-        issue_chip, self.issue_metric = self._metric_chip("需留意", "metricSun")
-        audio_chip, self.audio_metric = self._metric_chip("已有音频", "metricMint")
-        for chip in (page_chip, entry_chip, issue_chip, audio_chip):
-            chip.setMinimumWidth(82)
-            summary_layout.addWidget(chip)
-        root.addWidget(summary_card)
-
-        toolbar_card = self._card()
-        toolbar = QVBoxLayout(toolbar_card)
-        toolbar.setContentsMargins(14, 8, 14, 8)
-        toolbar.setSpacing(6)
-        filter_row = QHBoxLayout()
-        filter_row.setSpacing(8)
-        search_label = QLabel("搜索")
-        search_label.setObjectName("sectionTitle")
-        filter_row.addWidget(search_label)
+        filter_bar = QFrame()
+        filter_bar.setObjectName("filterBar")
+        filter_bar.setFixedHeight(66)
+        filter_row = QHBoxLayout(filter_bar)
+        filter_row.setContentsMargins(12, 10, 12, 10)
+        filter_row.setSpacing(9)
         self.search = QLineEdit()
-        self.search.setPlaceholderText("输入单词、音标或释义…")
-        self.search.setMinimumWidth(220)
-        self.search.setMaximumWidth(480)
+        self.search.setPlaceholderText("⌕  搜索单词、音标或释义…")
+        self.search.setMinimumWidth(280)
+        self.search.setMaximumWidth(500)
         self.search.textChanged.connect(self.refresh_table)
         filter_row.addWidget(self.search, 1)
-        self.issues_only = QCheckBox("只看异常")
-        self.issues_only.toggled.connect(self.refresh_table)
-        filter_row.addWidget(self.issues_only)
-        self.audio_ready_only = QCheckBox("只看已有音频")
+        self.all_filter_button = QPushButton("全部")
+        self.all_filter_button.setProperty("kind", "chip")
+        self.all_filter_button.setCheckable(True)
+        self.focus_filter_button = QPushButton("重点复习")
+        self.focus_filter_button.setProperty("kind", "chip")
+        self.focus_filter_button.setCheckable(True)
+        self.audio_ready_only = QPushButton("已有音频")
+        self.audio_ready_only.setProperty("kind", "chip")
+        self.audio_ready_only.setCheckable(True)
         self.audio_ready_only.toggled.connect(self.refresh_table)
+        self.all_filter_button.clicked.connect(lambda: self._set_learning_filter("all"))
+        self.focus_filter_button.clicked.connect(lambda: self._set_learning_filter("focus"))
+        filter_row.addWidget(self.all_filter_button)
+        filter_row.addWidget(self.focus_filter_button)
         filter_row.addWidget(self.audio_ready_only)
-        filter_row.addSpacing(10)
-        filter_row.addWidget(QLabel("学习范围"))
-        self.learning_filter = QComboBox()
-        self.learning_filter.addItem("全部词汇", "all")
-        self.learning_filter.addItem("重点复习 · 模糊＋不认识", "focus")
-        self.learning_filter.addItem("只看不认识", "unknown")
-        self.learning_filter.currentIndexChanged.connect(self.refresh_table)
-        filter_row.addWidget(self.learning_filter)
+        self.filter_button = QToolButton()
+        self.filter_button.setText("筛选")
+        self.filter_button.setPopupMode(QToolButton.InstantPopup)
+        filter_menu = QMenu(self.filter_button)
+        self.issues_only = QAction("只看异常", filter_menu)
+        self.issues_only.setCheckable(True)
+        self.issues_only.toggled.connect(self.refresh_table)
+        only_unknown = QAction("只看不认识", filter_menu)
+        only_unknown.triggered.connect(lambda: self._set_learning_filter("unknown"))
+        filter_menu.addAction(self.issues_only)
+        filter_menu.addAction(only_unknown)
+        self.filter_button.setMenu(filter_menu)
+        filter_row.addWidget(self.filter_button)
         filter_row.addStretch()
-        toolbar.addLayout(filter_row)
+        self.sort_order = QComboBox()
+        self.sort_order.addItem("序号从小到大", "asc")
+        self.sort_order.addItem("序号从大到小", "desc")
+        self.sort_order.setMinimumWidth(156)
+        filter_row.addWidget(self.sort_order)
+        root.addWidget(filter_bar)
 
-        settings_row = QHBoxLayout()
-        settings_row.setSpacing(8)
-        settings_row.addWidget(QLabel("声音"))
-        self.voice = QComboBox()
+        table_card = self._card("tableCard", shadow=True)
+        table_layout = QVBoxLayout(table_card)
+        table_layout.setContentsMargins(10, 8, 10, 8)
+        table_heading = QHBoxLayout()
+        self.table_count_label = QLabel("显示 0 条")
+        self.table_count_label.setObjectName("tableCount")
+        table_heading.addWidget(QLabel("词汇表"))
+        table_heading.addStretch()
+        table_heading.addWidget(self.table_count_label)
+        table_layout.addLayout(table_heading)
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(("序号", "单词", "音标", "中文释义"))
+        self.table.setAlternatingRowColors(True)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(42)
+        header_view = self.table.horizontalHeader()
+        for column in (0, 1, 2):
+            header_view.setSectionResizeMode(column, QHeaderView.Interactive)
+        for column, width in {0: 72, 1: 210, 2: 280}.items():
+            header_view.resizeSection(column, width)
+        header_view.setSectionResizeMode(3, QHeaderView.Stretch)
+        header_view.setStretchLastSection(False)
+        self.table.doubleClicked.connect(self.play_selected)
+        self.table.itemSelectionChanged.connect(self._update_player_entry)
+        table_layout.addWidget(self.table)
+        root.addWidget(table_card, 1)
+
+        player = QFrame()
+        player.setObjectName("playerBar")
+        player.setMinimumHeight(126)
+        player_layout = QVBoxLayout(player)
+        player_layout.setContentsMargins(14, 10, 14, 8)
+        player_layout.setSpacing(5)
+        controls = QHBoxLayout()
+        controls.setSpacing(10)
+        self.single_play_button = QPushButton("🔊")
+        self.single_play_button.setFixedSize(48, 48)
+        self.single_play_button.setToolTip("试听当前单词")
+        self.single_play_button.clicked.connect(self.play_selected)
+        controls.addWidget(self.single_play_button)
+        player_copy = QVBoxLayout()
+        player_copy.setSpacing(1)
+        self.player_word = QLabel("选择一个单词开始学习")
+        self.player_word.setObjectName("playerWord")
+        details = QHBoxLayout()
+        self.player_phonetic = QLabel("")
+        self.player_phonetic.setObjectName("playerPhonetic")
+        self.player_meaning = QLabel("")
+        self.player_meaning.setObjectName("playerMeaning")
+        details.addWidget(self.player_phonetic)
+        details.addSpacing(18)
+        details.addWidget(self.player_meaning)
+        details.addStretch()
+        player_copy.addWidget(self.player_word)
+        player_copy.addLayout(details)
+        controls.addLayout(player_copy, 1)
+        self.previous_button = QPushButton("|◀")
+        self.previous_button.setProperty("kind", "transport")
+        self.previous_button.setFixedSize(44, 44)
+        self.previous_button.setFocusPolicy(Qt.NoFocus)
+        self.previous_button.setToolTip("选择上一词")
+        self.previous_button.clicked.connect(lambda: self._select_relative_entry(-1))
+        controls.addWidget(self.previous_button)
+        self.continuous_play_button = QPushButton("▶")
+        self.continuous_play_button.setObjectName("continuousPlayButton")
+        self.continuous_play_button.setFixedSize(60, 60)
+        self.continuous_play_button.setFocusPolicy(Qt.NoFocus)
+        play_shadow = QGraphicsDropShadowEffect(self.continuous_play_button)
+        play_shadow.setBlurRadius(18)
+        play_shadow.setOffset(0, 4)
+        play_shadow.setColor(QColor(188, 88, 91, 80))
+        self.continuous_play_button.setGraphicsEffect(play_shadow)
+        self.continuous_play_button.setToolTip("从当前词开始连续学习")
+        self.continuous_play_button.clicked.connect(self.toggle_continuous_playback)
+        controls.addWidget(self.continuous_play_button)
+        self.next_button = QPushButton("▶|")
+        self.next_button.setProperty("kind", "transport")
+        self.next_button.setFixedSize(44, 44)
+        self.next_button.setFocusPolicy(Qt.NoFocus)
+        self.next_button.setToolTip("选择下一词")
+        self.next_button.clicked.connect(lambda: self._select_relative_entry(1))
+        controls.addWidget(self.next_button)
+        self.learning_settings_button = QPushButton("⚙  学习设置")
+        self.learning_settings_button.clicked.connect(self.show_learning_settings)
+        controls.addWidget(self.learning_settings_button)
+        for label, status, kind in (
+            ("认识", "known", "mint"),
+            ("模糊", "unsure", "sun"),
+            ("不认识", "unknown", "danger"),
+        ):
+            button = QPushButton(label)
+            button.setProperty("kind", kind)
+            button.clicked.connect(lambda _checked=False, value=status: self.mark_selected(value))
+            controls.addWidget(button)
+        player_layout.addLayout(controls)
+        status_row = QHBoxLayout()
+        status_row.setSpacing(9)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setTextVisible(False)
+        self.status_label = QLabel(self.opening_phrase)
+        self.status_label.setObjectName("muted")
+        status_row.addWidget(self.progress, 1)
+        status_row.addWidget(self.status_label)
+        player_layout.addLayout(status_row)
+        root.addWidget(player)
+        self.voice.currentIndexChanged.connect(self._on_tts_settings_changed)
+        self.speed.valueChanged.connect(self._on_tts_settings_changed)
+        self.sort_order.currentIndexChanged.connect(self.refresh_table)
+        self._set_learning_filter("all", refresh=False)
+        self._configure_more_menu()
+
+    def _build_learning_settings_dialog(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("学习设置")
+        dialog.resize(430, 330)
+        layout = QVBoxLayout(dialog)
+        title = QLabel("学习设置")
+        title.setObjectName("heroTitle")
+        intro = QLabel("声音、速度和连续播放规则会自动保存。")
+        intro.setObjectName("muted")
+        layout.addWidget(title)
+        layout.addWidget(intro)
+        form = QFormLayout()
+        self.voice = QComboBox(dialog)
         for label, voice_id in (
             ("美式女声 · Sarah", "af_sarah"),
             ("美式女声 · Heart", "af_heart"),
@@ -940,146 +1044,121 @@ class WordVoiceWindow(QMainWindow):
         ):
             self.voice.addItem(label, voice_id)
         self.voice.setToolTip("更换声音后，下次试听或生成会重新制作对应音频")
-        settings_row.addWidget(self.voice)
-        settings_row.addSpacing(12)
-        settings_row.addWidget(QLabel("语速"))
-        self.speed = QDoubleSpinBox()
+        self.speed = QDoubleSpinBox(dialog)
         self.speed.setRange(0.6, 1.3)
         self.speed.setSingleStep(0.1)
         self.speed.setDecimals(2)
         self.speed.setSuffix(" 倍")
-        self.speed.setValue(0.9)
-        self.speed.setToolTip("改变语速后，下次试听或生成会重新制作对应音频")
-        settings_row.addWidget(self.speed)
-        settings_row.addSpacing(12)
-        settings_row.addWidget(QLabel("排序"))
-        self.sort_order = QComboBox()
-        self.sort_order.addItem("序号从小到大", "asc")
-        self.sort_order.addItem("序号从大到小", "desc")
-        settings_row.addWidget(self.sort_order)
-        settings_row.addStretch()
-        toolbar.addLayout(settings_row)
-
-        study_row = QHBoxLayout()
-        study_row.setSpacing(7)
-        study_label = QLabel("连续学习")
-        study_label.setObjectName("sectionTitle")
-        study_row.addWidget(study_label)
-        study_row.addWidget(QLabel("重复"))
-        self.repeat_count = QComboBox()
+        self.speed.setValue(float(self._settings.value("tts/speed", 0.9)))
+        self.repeat_count = QComboBox(dialog)
         for count in range(1, 6):
             self.repeat_count.addItem(f"{count} 次", count)
         saved_repeat = max(1, min(5, int(self._settings.value("playback/repeat", 1))))
         self.repeat_count.setCurrentIndex(saved_repeat - 1)
-        study_row.addWidget(self.repeat_count)
-        study_row.addWidget(QLabel("间隔"))
-        self.pause_seconds = QDoubleSpinBox()
+        self.pause_seconds = QDoubleSpinBox(dialog)
         self.pause_seconds.setRange(0.0, 10.0)
         self.pause_seconds.setSingleStep(0.5)
         self.pause_seconds.setDecimals(1)
         self.pause_seconds.setSuffix(" 秒")
         self.pause_seconds.setValue(float(self._settings.value("playback/pause", 1.0)))
-        study_row.addWidget(self.pause_seconds)
-        self.play_mode = QComboBox()
+        self.play_mode = QComboBox(dialog)
         self.play_mode.addItem("只听英文", "english")
         self.play_mode.addItem("英文＋中文释义", "bilingual")
         saved_mode = str(self._settings.value("playback/mode", "english"))
         self.play_mode.setCurrentIndex(1 if saved_mode == "bilingual" else 0)
-        study_row.addWidget(self.play_mode)
-        self.continuous_play_button = QPushButton("从所选开始")
-        self.continuous_play_button.setProperty("kind", "primary")
-        self.continuous_play_button.clicked.connect(self.start_continuous_playback)
-        study_row.addWidget(self.continuous_play_button)
-        stop_play_button = QPushButton("停止播放")
-        stop_play_button.clicked.connect(self.stop_continuous_playback)
-        study_row.addWidget(stop_play_button)
-        study_row.addStretch()
-        for label, status, kind in (
-            ("认识", "known", "mint"),
-            ("模糊", "unsure", "sun"),
-            ("不认识", "unknown", "lavender"),
-        ):
-            button = QPushButton(label)
-            button.setProperty("kind", kind)
-            button.clicked.connect(lambda _checked=False, value=status: self.mark_selected(value))
-            study_row.addWidget(button)
-        toolbar.addLayout(study_row)
-        root.addWidget(toolbar_card)
+        form.addRow("声音", self.voice)
+        form.addRow("语速", self.speed)
+        form.addRow("重复次数", self.repeat_count)
+        form.addRow("词间暂停", self.pause_seconds)
+        form.addRow("播放内容", self.play_mode)
+        layout.addLayout(form)
+        done = QPushButton("完成")
+        done.setProperty("kind", "primary")
+        done.clicked.connect(dialog.accept)
+        layout.addWidget(done, 0, Qt.AlignRight)
+        self.learning_settings_dialog = dialog
 
-        table_card = self._card("tableCard", shadow=True)
-        table_layout = QVBoxLayout(table_card)
-        table_layout.setContentsMargins(12, 10, 12, 12)
-        table_heading = QHBoxLayout()
-        table_title = QLabel("词汇小队")
-        table_title.setObjectName("sectionTitle")
-        self.table_count_label = QLabel("显示 0 条")
-        self.table_count_label.setObjectName("tableCount")
-        table_heading.addWidget(table_title)
-        table_heading.addStretch()
-        table_heading.addWidget(self.table_count_label)
-        table_layout.addLayout(table_heading)
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(("序号", "单词", "注音", "释义", "页码", "状态"))
-        self.table.setAlternatingRowColors(True)
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SingleSelection)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(34)
-        header_view = self.table.horizontalHeader()
-        for column in (0, 1, 2, 4, 5):
-            header_view.setSectionResizeMode(column, QHeaderView.Interactive)
-        for column, width in {0: 62, 1: 120, 2: 150, 4: 70, 5: 92}.items():
-            header_view.resizeSection(column, width)
-        header_view.setSectionResizeMode(3, QHeaderView.Stretch)
-        header_view.setStretchLastSection(False)
-        self.table.doubleClicked.connect(self.play_selected)
-        table_layout.addWidget(self.table)
-        root.addWidget(table_card, 1)
+    def _configure_more_menu(self) -> None:
+        menu = QMenu(self.more_button)
+        audio_menu = menu.addMenu("音频工具")
+        audio_menu.addAction("生成 30 词样本", self.generate_samples)
+        audio_menu.addAction("生成全部", self.generate_all)
+        audio_menu.addSeparator()
+        audio_menu.addAction("停止全部任务", self.stop_all_tasks)
+        audio_menu.addAction("打开音频文件夹", self.open_audio_folder)
+        export_menu = menu.addMenu("导出 Anki")
+        export_menu.addAction("导出已有音频", self.export_ready_anki)
+        export_menu.addAction("导出全部 Anki", self.export_anki)
+        appearance_menu = menu.addMenu("界面与贴纸")
+        appearance_menu.addAction("换贴纸", self.rotate_sticker)
+        appearance_menu.addAction("管理我的贴纸", self.manage_stickers)
+        appearance_menu.addAction("换一句鼓励", self.rotate_phrase)
+        menu.addSeparator()
+        menu.addAction("编辑所选词条", self.edit_selected)
+        menu.addAction("备份与恢复", self.manage_current_backups)
+        self.more_menu = menu
+        self.more_button.setMenu(menu)
 
-        actions = QHBoxLayout()
-        actions.setSpacing(7)
-        for label, handler, kind in (
-            ("试听所选", self.play_selected, "primary"),
-            ("编辑词条", self.edit_selected, ""),
-            ("生成 30 词样本", self.generate_samples, "sun"),
-            ("生成全部", self.generate_all, "lavender"),
-            ("停止全部", self.stop_all_tasks, ""),
-            ("打开音频文件夹", self.open_audio_folder, ""),
-        ):
-            button = QPushButton(label)
-            if kind:
-                button.setProperty("kind", kind)
-            button.clicked.connect(handler)
-            actions.addWidget(button)
-        actions.addStretch()
-        ready_export_button = QPushButton("导出已有音频")
-        ready_export_button.setProperty("kind", "mint")
-        ready_export_button.clicked.connect(self.export_ready_anki)
-        actions.addWidget(ready_export_button)
-        export_button = QPushButton("导出全部 Anki")
-        export_button.setProperty("kind", "lavender")
-        export_button.clicked.connect(self.export_anki)
-        actions.addWidget(export_button)
-        root.addLayout(actions)
+    def _set_learning_filter(self, value: str, refresh: bool = True) -> None:
+        self.learning_filter_value = value
+        self.all_filter_button.setChecked(value == "all")
+        self.focus_filter_button.setChecked(value == "focus")
+        if refresh:
+            self.refresh_table()
 
-        footer = self._card("statusCard")
-        footer_layout = QHBoxLayout(footer)
-        footer_layout.setContentsMargins(13, 8, 13, 8)
-        status_mark = QLabel("♡")
-        status_mark.setObjectName("phraseMark")
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 100)
-        self.progress.setTextVisible(False)
-        self.status_label = QLabel("准备好啦，点击右上角选择词汇吧")
-        self.status_label.setObjectName("muted")
-        footer_layout.addWidget(status_mark)
-        footer_layout.addWidget(self.progress, 1)
-        footer_layout.addWidget(self.status_label)
-        root.addWidget(footer)
-        self.voice.currentIndexChanged.connect(self._on_tts_settings_changed)
-        self.speed.valueChanged.connect(self._on_tts_settings_changed)
-        self.sort_order.currentIndexChanged.connect(self.refresh_table)
+    @Slot()
+    def show_learning_settings(self) -> None:
+        self.learning_settings_dialog.exec()
+
+    @Slot()
+    def manage_current_backups(self) -> None:
+        if self.workspace is None:
+            self.choose_vocabulary()
+            return
+        project = next(
+            (item for item in list_imported_projects() if item.workspace.root == self.workspace.root),
+            None,
+        )
+        dialog = BackupDialog(project, list_database_backups(self.workspace), self)
+        if dialog.exec() == QDialog.Accepted and dialog.restored_workspace is not None:
+            restored = next(
+                (item for item in list_imported_projects() if item.workspace.root == dialog.restored_workspace),
+                None,
+            )
+            if restored is not None:
+                self.load_imported_project(restored)
+
+    @Slot()
+    def toggle_continuous_playback(self) -> None:
+        if self._continuous_running:
+            self.stop_continuous_playback()
+        else:
+            self.start_continuous_playback()
+
+    def _select_relative_entry(self, offset: int) -> None:
+        if not self.table.rowCount():
+            return
+        row = self.table.currentRow()
+        row = 0 if row < 0 else max(0, min(self.table.rowCount() - 1, row + offset))
+        self.table.selectRow(row)
+        item = self.table.item(row, 0)
+        if item is not None:
+            self.table.scrollToItem(item)
+
+    @Slot()
+    def _update_player_entry(self) -> None:
+        if not self.store or self.table.currentRow() < 0:
+            self.player_word.setText("选择一个单词开始学习")
+            self.player_phonetic.setText("")
+            self.player_meaning.setText("")
+            return
+        item = self.table.item(self.table.currentRow(), 0)
+        entry = self.store.get_entry(int(item.text())) if item else None
+        if entry is None:
+            return
+        self.player_word.setText(entry.word)
+        self.player_phonetic.setText(entry.phonetic)
+        self.player_meaning.setText(entry.meaning)
 
     def _start_worker(self, worker: QObject, run_signal, finish_signals: tuple) -> None:
         thread = QThread(self)
@@ -1201,12 +1280,15 @@ class WordVoiceWindow(QMainWindow):
         if not self.document or not self.store:
             return
         counts = self.store.audio_counts()
-        self.summary_label.setText(self.document.source_path.name)
+        source_name = self.document.source_path.stem
+        if len(source_name) > 18:
+            source_name = f"{source_name[:16]}…"
+        self.summary_label.setText(f"{source_name} · {len(self.document.entries)} 词")
+        self.summary_label.setToolTip(self.document.source_path.name)
         self.summary_meta.setText("解析完成，可以连续播放、标记熟悉度、生成或导出学习卡组")
-        self.page_metric.setText(str(self.document.page_count))
-        self.entry_metric.setText(str(len(self.document.entries)))
-        self.issue_metric.setText(str(self.document.flagged_count))
-        self.audio_metric.setText(str(counts["ready"]))
+        self.table_count_label.setText(
+            f"{self.document.page_count} 页 · {self.document.flagged_count} 条需留意 · 已有音频 {counts['ready']}"
+        )
 
     @Slot(str)
     def _on_extraction_error(self, message: str) -> None:
@@ -1223,7 +1305,7 @@ class WordVoiceWindow(QMainWindow):
             search=self.search.text().strip(),
             issues_only=self.issues_only.isChecked(),
             audio_ready_only=self.audio_ready_only.isChecked(),
-            learning_filter=str(self.learning_filter.currentData()),
+            learning_filter=self.learning_filter_value,
         )
         self.table_count_label.setText(f"显示 {len(entries)} 条")
         statuses = self.store.audio_status_map()
@@ -1239,24 +1321,30 @@ class WordVoiceWindow(QMainWindow):
             if learning != "unrated":
                 parts.append(LEARNING_LABELS.get(learning, learning))
             status = " · ".join(part for part in parts if part)
-            values = (entry.sequence, entry.word, entry.phonetic, entry.meaning, entry.page, status)
+            row_details = f"第 {entry.page} 页"
+            if status:
+                row_details = f"{row_details} · {status}"
+            values = (entry.sequence, entry.word, entry.phonetic, entry.meaning)
             for column, value in enumerate(values):
                 item = QTableWidgetItem()
-                if column in (0, 4):
+                if column == 0:
                     item.setData(Qt.DisplayRole, int(value))
                 else:
                     item.setText(str(value))
-                if column in (0, 4):
+                if column == 0:
                     item.setTextAlignment(Qt.AlignCenter)
+                item.setToolTip(row_details)
                 if entry.has_issue:
                     item.setBackground(QColor("#fff7ed"))
                 self.table.setItem(row_index, column, item)
         self.table.setSortingEnabled(True)
         order = Qt.DescendingOrder if self.sort_order.currentData() == "desc" else Qt.AscendingOrder
         self.table.sortItems(0, order)
+        self._update_player_entry()
 
     @Slot()
     def _on_tts_settings_changed(self) -> None:
+        self._settings.setValue("tts/speed", self.speed.value())
         self.status_label.setText("声音或语速已更改；下次试听或生成时会重新制作对应音频")
 
     def selected_entry(self) -> VocabularyEntry | None:
@@ -1345,7 +1433,8 @@ class WordVoiceWindow(QMainWindow):
         self.playback_stop_event.clear()
         _stop_windows_sound()
         self._continuous_running = True
-        self.continuous_play_button.setEnabled(False)
+        self.continuous_play_button.setText("■")
+        self.continuous_play_button.setToolTip("停止连续播放")
         worker = ContinuousPlaybackWorker(
             service,
             entries,
@@ -1382,6 +1471,8 @@ class WordVoiceWindow(QMainWindow):
     def _on_continuous_finished(self, completed: int, failed: int, stopped: bool) -> None:
         self._continuous_running = False
         self.continuous_play_button.setEnabled(True)
+        self.continuous_play_button.setText("▶")
+        self.continuous_play_button.setToolTip("从当前词开始连续学习")
         self.status_label.setText(
             f"{'连续播放已停止' if stopped else '连续播放完成'}：完成 {completed}，跳过 {failed}"
         )

@@ -67,13 +67,16 @@ class WorkerLifetimeTests(unittest.TestCase):
         self.assertFalse(window._active_workers)
         window.close()
 
-    def test_v040_learning_controls_and_assets_are_visible(self) -> None:
+    def test_v050_focus_layout_keeps_learning_controls_and_secondary_menus(self) -> None:
         window = WordVoiceWindow()
         labels = {button.text() for button in window.findChildren(QPushButton)}
-        self.assertEqual("单词文档配音 v0.4.0", window.windowTitle())
+        action_labels = {action.text() for action in window.more_menu.actions()}
+        self.assertEqual("单词文档配音 v0.5.0", window.windowTitle())
         self.assertEqual("选择词汇", window.choose_button.text())
-        self.assertEqual("还没有选择词汇 PDF", window.summary_label.text())
-        self.assertEqual("只看已有音频", window.audio_ready_only.text())
+        self.assertEqual("还没有选择词汇", window.summary_label.text())
+        self.assertEqual("已有音频", window.audio_ready_only.text())
+        self.assertTrue(window.all_filter_button.isChecked())
+        self.assertTrue(window.audio_ready_only.isCheckable())
         self.assertEqual("af_sarah", window.voice.currentData())
         self.assertEqual("序号从小到大", window.sort_order.currentText())
         self.assertIn(window.opening_phrase, HEALING_PHRASES)
@@ -81,17 +84,18 @@ class WorkerLifetimeTests(unittest.TestCase):
         self.assertEqual(5, len(BUILTIN_STICKERS))
         self.assertNotIn("crayon-shinnosuke.png", BUILTIN_STICKERS)
         self.assertFalse(window.windowIcon().isNull())
-        self.assertEqual("换一句", window.phrase_button.text())
         self.assertFalse(window.sticker_label.pixmap().isNull())
-        self.assertIn("打开音频文件夹", labels)
-        self.assertIn("导出已有音频", labels)
-        self.assertIn("导出全部 Anki", labels)
-        self.assertIn("从所选开始", labels)
-        self.assertIn("停止播放", labels)
+        self.assertEqual(4, window.table.columnCount())
+        self.assertEqual("序号", window.table.horizontalHeaderItem(0).text())
+        self.assertEqual("中文释义", window.table.horizontalHeaderItem(3).text())
+        self.assertIn("▶", labels)
         self.assertIn("认识", labels)
         self.assertIn("模糊", labels)
         self.assertIn("不认识", labels)
-        self.assertIn("＋我的贴纸", labels)
+        self.assertEqual("⚙  学习设置", window.learning_settings_button.text())
+        self.assertIn("音频工具", action_labels)
+        self.assertIn("导出 Anki", action_labels)
+        self.assertIn("备份与恢复", action_labels)
         self.assertEqual(5, window.repeat_count.count())
         self.assertEqual("只听英文", window.play_mode.currentText())
         window.close()
@@ -178,7 +182,7 @@ class WorkerLifetimeTests(unittest.TestCase):
 
             window.load_imported_project(project)
 
-            self.assertEqual("no-longer-present.pdf", window.summary_label.text())
+            self.assertEqual("no-longer-present · 1 词", window.summary_label.text())
             self.assertEqual(1, window.table.rowCount())
             self.assertEqual("cached", window.table.item(0, 1).text())
             self.assertEqual("已载入已导入的词汇", window.status_label.text())
@@ -204,19 +208,59 @@ class WorkerLifetimeTests(unittest.TestCase):
             window.refresh_table()
             descending = [int(window.table.item(row, 0).text()) for row in range(3)]
             descending_widths = tuple(
-                window.table.horizontalHeader().sectionSize(column) for column in range(6)
+                window.table.horizontalHeader().sectionSize(column) for column in range(4)
             )
             window.sort_order.setCurrentIndex(0)
             window.refresh_table()
             ascending = [int(window.table.item(row, 0).text()) for row in range(3)]
             ascending_widths = tuple(
-                window.table.horizontalHeader().sectionSize(column) for column in range(6)
+                window.table.horizontalHeader().sectionSize(column) for column in range(4)
             )
 
             self.assertEqual([10, 2, 1], descending)
             self.assertEqual([1, 2, 10], ascending)
             self.assertEqual(descending_widths, ascending_widths)
             window.close()
+
+    def test_v050_player_tracks_selected_word_and_focus_filter(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = VocabularyStore(Path(directory) / "test.sqlite3")
+            entries = [
+                VocabularyEntry(1, "known", "nəʊn", "认识", 1),
+                VocabularyEntry(2, "unsure", "ʌnˈʃʊə", "模糊", 1),
+                VocabularyEntry(3, "unknown", "ʌnˈnəʊn", "不认识", 1),
+            ]
+            store.import_document(
+                ExtractedDocument(Path("sample.pdf"), "abc", 1, entries, [])
+            )
+            store.set_learning_status(1, "known")
+            store.set_learning_status(2, "unsure")
+            store.set_learning_status(3, "unknown")
+            window = WordVoiceWindow()
+            window.store = store
+            window.refresh_table()
+            window.table.selectRow(1)
+            window._update_player_entry()
+
+            self.assertEqual("unsure", window.player_word.text())
+            self.assertEqual("ʌnˈʃʊə", window.player_phonetic.text())
+            self.assertEqual("模糊", window.player_meaning.text())
+            window._set_learning_filter("focus")
+            visible_sequences = [int(window.table.item(row, 0).text()) for row in range(window.table.rowCount())]
+            self.assertEqual([2, 3], visible_sequences)
+            self.assertTrue(window.focus_filter_button.isChecked())
+            window.close()
+
+    def test_v050_transport_controls_keep_focus_player_shape(self) -> None:
+        window = WordVoiceWindow()
+
+        self.assertEqual("continuousPlayButton", window.continuous_play_button.objectName())
+        self.assertEqual((60, 60), (window.continuous_play_button.width(), window.continuous_play_button.height()))
+        self.assertEqual("transport", window.previous_button.property("kind"))
+        self.assertEqual("transport", window.next_button.property("kind"))
+        self.assertEqual((44, 44), (window.previous_button.width(), window.previous_button.height()))
+        self.assertEqual((44, 44), (window.next_button.width(), window.next_button.height()))
+        window.close()
 
 
 if __name__ == "__main__":
