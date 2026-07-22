@@ -25,6 +25,7 @@ from word_voice.app import (
     choose_rotating_value,
     import_custom_sticker,
     run_portable_extract_smoke,
+    run_portable_playback_smoke,
 )
 from word_voice.models import ExtractedDocument, VocabularyEntry
 from word_voice.storage import ProjectWorkspace, VocabularyStore, list_imported_projects
@@ -73,7 +74,7 @@ class WorkerLifetimeTests(unittest.TestCase):
         window = WordVoiceWindow()
         labels = {button.text() for button in window.findChildren(QPushButton)}
         action_labels = {action.text() for action in window.more_menu.actions()}
-        self.assertEqual("单词文档配音 v0.6.0", window.windowTitle())
+        self.assertEqual("单词文档配音 v0.6.1", window.windowTitle())
         self.assertEqual("选择词汇", window.choose_button.text())
         self.assertEqual("还没有选择词汇", window.summary_label.text())
         self.assertEqual("已有音频", window.audio_ready_only.text())
@@ -216,6 +217,41 @@ class WorkerLifetimeTests(unittest.TestCase):
         self.assertEqual(["一", "二"], spoken)
         self.assertEqual([(1, 1), (1, 2), (1, 3), (2, 1), (2, 2), (2, 3)], current)
         self.assertEqual([(2, 0, False)], finished)
+
+    def test_continuous_worker_default_player_honors_stop_event(self) -> None:
+        class FakeService:
+            def ensure_audio(self, item):
+                return Path(f"{item.sequence}.wav")
+
+        stop_event = threading.Event()
+        worker = ContinuousPlaybackWorker(
+            FakeService(),
+            [VocabularyEntry(1, "one", "", "一", 1)],
+            repeat_count=1,
+            pause_seconds=0,
+            include_meaning=False,
+            stop_event=stop_event,
+        )
+        with patch("word_voice.app.play_wav_sync", return_value=True) as player:
+            worker.run()
+        player.assert_called_once_with(Path("1.wav"), stop_event)
+
+    def test_portable_playback_smoke_uses_english_and_chinese_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            wav = root / "english.wav"
+            wav.write_bytes(b"wav")
+            error = root / "playback-error.txt"
+            with (
+                patch("word_voice.app.chinese_voice_available", return_value=True),
+                patch("word_voice.app.play_wav_sync", return_value=True) as player,
+                patch("word_voice.app.speak_chinese", return_value=True) as speaker,
+            ):
+                result = run_portable_playback_smoke(wav, error)
+            self.assertEqual(0, result)
+            player.assert_called_once_with(wav)
+            speaker.assert_called_once_with("中文连续播放测试成功")
+            self.assertFalse(error.exists())
 
     def test_user_can_import_a_custom_sticker(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

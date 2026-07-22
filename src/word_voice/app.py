@@ -46,6 +46,7 @@ from . import __version__
 from .anki_export import AnkiExportError, export_anki_deck
 from .extractor import ExtractionCancelled, extract_vocabulary_pdf, write_json
 from .models import ExtractedDocument, VocabularyEntry
+from .playback import play_wav_sync
 from .samples import select_pronunciation_samples
 from .speech import chinese_voice_available, speak_chinese
 from .storage import (
@@ -217,14 +218,6 @@ def import_custom_sticker(source: str | Path) -> Path:
     return destination
 
 
-def _play_wav_sync(path: Path) -> None:
-    if not hasattr(sys, "getwindowsversion"):
-        raise RuntimeError("当前播放入口仅支持 Windows")
-    import winsound
-
-    winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_SYNC)
-
-
 def _stop_windows_sound() -> None:
     if not hasattr(sys, "getwindowsversion"):
         return
@@ -292,6 +285,21 @@ def run_portable_extract_smoke(pdf_path: Path, output_path: Path) -> int:
         return 0
     except Exception:
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        error_path.write_text(traceback.format_exc(), encoding="utf-8")
+        return 1
+
+
+def run_portable_playback_smoke(wav_path: Path, error_path: Path) -> int:
+    """Play real English and Chinese audio through the packaged playback chain."""
+    try:
+        if not chinese_voice_available():
+            raise RuntimeError("Windows 没有可用的中文语音")
+        play_wav_sync(wav_path)
+        speak_chinese("中文连续播放测试成功")
+        error_path.unlink(missing_ok=True)
+        return 0
+    except Exception:
+        error_path.parent.mkdir(parents=True, exist_ok=True)
         error_path.write_text(traceback.format_exc(), encoding="utf-8")
         return 1
 
@@ -374,8 +382,8 @@ class PlayWorker(QObject):
                 raise RuntimeError("当前播放入口仅支持 Windows")
             import winsound
 
-            winsound.PlaySound(str(path), winsound.SND_FILENAME | winsound.SND_ASYNC)
-            self.finished.emit(f"正在播放：{self.entry.word}")
+            play_wav_sync(path)
+            self.finished.emit(f"播放完成：{self.entry.word}")
         except Exception as exc:
             self.error.emit(str(exc))
 
@@ -403,7 +411,9 @@ class ContinuousPlaybackWorker(QObject):
         self.pause_seconds = max(0.0, pause_seconds)
         self.include_meaning = include_meaning
         self.stop_event = stop_event
-        self.audio_player = audio_player or _play_wav_sync
+        self.audio_player = audio_player or (
+            lambda path: play_wav_sync(path, self.stop_event)
+        )
         self.meaning_speaker = meaning_speaker or speak_chinese
 
     @Slot()
@@ -1877,6 +1887,14 @@ class WordVoiceWindow(QMainWindow):
 
 def main() -> int:
     arguments = sys.argv[1:]
+    if "--smoke-playback" in arguments:
+        argument_index = arguments.index("--smoke-playback")
+        if argument_index + 2 >= len(arguments):
+            return 2
+        return run_portable_playback_smoke(
+            Path(arguments[argument_index + 1]),
+            Path(arguments[argument_index + 2]),
+        )
     if "--smoke-extract" in arguments:
         argument_index = arguments.index("--smoke-extract")
         if argument_index + 2 >= len(arguments):

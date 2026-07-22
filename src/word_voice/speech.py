@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import os
 import platform
 import re
 import subprocess
+import tempfile
 import threading
 import time
 from functools import lru_cache
+from pathlib import Path
+
+from .playback import play_wav_sync
 
 
 class ChineseSpeechError(RuntimeError):
@@ -25,6 +30,11 @@ def _powershell_command() -> list[str]:
 $ErrorActionPreference = 'Stop'
 [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
 Add-Type -AssemblyName System.Speech
+$outputPath = [Environment]::GetEnvironmentVariable('WORD_VOICE_CHINESE_WAV')
+if ([string]::IsNullOrWhiteSpace($outputPath)) {
+    [Console]::Error.Write('没有收到中文语音输出路径')
+    exit 4
+}
 $text = [Console]::In.ReadToEnd()
 $speaker = [System.Speech.Synthesis.SpeechSynthesizer]::new()
 $voice = $speaker.GetInstalledVoices() |
@@ -36,7 +46,13 @@ if ($null -eq $voice) {
 }
 $speaker.SelectVoice($voice.VoiceInfo.Name)
 $speaker.Rate = -1
-$speaker.Speak($text)
+$speaker.SetOutputToWaveFile($outputPath)
+try {
+    $speaker.Speak($text)
+} finally {
+    $speaker.SetOutputToNull()
+    $speaker.Dispose()
+}
 """.strip()
     return ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script]
 
@@ -74,23 +90,38 @@ def speak_chinese(meaning: str, stop_event: threading.Event | None = None) -> bo
         return True
     if platform.system() != "Windows":
         raise ChineseSpeechError("中文释义朗读目前仅支持 Windows")
-    process = subprocess.Popen(
-        _powershell_command(),
-        stdin=subprocess.PIPE,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    assert process.stdin is not None
-    process.stdin.write(text.encode("utf-8"))
-    process.stdin.close()
-    while process.poll() is None:
-        if stop_event and stop_event.is_set():
-            process.terminate()
-            process.wait(timeout=5)
-            return False
-        time.sleep(0.05)
-    error = process.stderr.read().decode("utf-8", errors="replace") if process.stderr else ""
-    if process.returncode != 0:
-        raise ChineseSpeechError(error.strip() or "Windows 中文语音朗读失败")
-    return True
+    temporary = tempfile.NamedTemporaryFile(prefix="word-voice-zh-", suffix=".wav", delete=False)
+    output_path = Path(temporary.name)
+    temporary.close()
+    try:
+        process = subprocess.Popen(
+            _powershell_command(),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            env={**os.environ, "WORD_VOICE_CHINESE_WAV": str(output_path)},
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        assert process.stdin is not None
+        process.stdin.write(text.encode("utf-8"))
+        process.stdin.close()
+        while process.poll() is None:
+            if stop_event and stop_event.is_set():
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+                return False
+            time.sleep(0.05)
+        error = (
+            process.stderr.read().decode("utf-8", errors="replace")
+            if process.stderr
+            else ""
+        )
+        if process.returncode != 0:
+            raise ChineseSpeechError(error.strip() or "Windows 中文语音生成失败")
+        return play_wav_sync(output_path, stop_event)
+    finally:
+        output_path.unlink(missing_ok=True)

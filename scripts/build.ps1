@@ -15,7 +15,7 @@ if ($LASTEXITCODE -ne 0) {
 & $pythonPath -m pip install "pyinstaller>=6.10,<7"
 & $pythonPath -m PyInstaller --noconfirm --clean (Join-Path $projectRoot "packaging\word_voice.spec")
 
-$result = Join-Path $projectRoot "dist\WordPdfVoice-v0.6.0\WordPdfVoice-v0.6.0.exe"
+$result = Join-Path $projectRoot "dist\WordPdfVoice-v0.6.1\WordPdfVoice-v0.6.1.exe"
 if (-not (Test-Path -LiteralPath $result)) {
     throw "Build failed: missing $result"
 }

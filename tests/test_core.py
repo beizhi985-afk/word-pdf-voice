@@ -4,8 +4,10 @@ import tempfile
 import unittest
 import wave
 import sqlite3
+from io import BytesIO
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
 from word_voice.models import ExtractedDocument, VocabularyEntry
 from word_voice.samples import select_pronunciation_samples
@@ -19,7 +21,7 @@ from word_voice.storage import (
     open_imported_project,
     restore_database_backup,
 )
-from word_voice.speech import meaning_for_speech
+from word_voice.speech import meaning_for_speech, speak_chinese
 from word_voice.tts import AudioService, audio_filename
 
 
@@ -362,6 +364,44 @@ class SpeechTests(unittest.TestCase):
             "附近的，在附近，在附近",
             meaning_for_speech("adj.附近的 adv.在附近 prep.在...附近"),
         )
+
+    def test_chinese_audio_path_is_passed_without_command_line_parsing(self) -> None:
+        captured: dict[str, object] = {}
+
+        class InputSink:
+            def write(self, data: bytes) -> None:
+                captured["input"] = data
+
+            def close(self) -> None:
+                return None
+
+        class FakeProcess:
+            stdin = InputSink()
+            stderr = BytesIO()
+            returncode = 0
+
+            def poll(self):
+                return 0
+
+        def fake_popen(command, **kwargs):
+            captured["command"] = command
+            captured["env"] = kwargs["env"]
+            return FakeProcess()
+
+        with (
+            patch("word_voice.speech.platform.system", return_value="Windows"),
+            patch("word_voice.speech.subprocess.Popen", side_effect=fake_popen),
+            patch("word_voice.speech.play_wav_sync", return_value=True) as player,
+        ):
+            self.assertTrue(speak_chinese("中文释义"))
+
+        command = captured["command"]
+        environment = captured["env"]
+        output_path = Path(environment["WORD_VOICE_CHINESE_WAV"])
+        self.assertNotIn(str(output_path), " ".join(command))
+        player.assert_called_once_with(output_path, None)
+        self.assertEqual("中文释义".encode("utf-8"), captured["input"])
+        self.assertFalse(output_path.exists())
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@
 - [SQLite 版本迁移、自动备份与可恢复替换](experience-Library/2026-07-19-sqlite-backup-and-recovery.md)：迁移前一致性快照、每日备份、完整性检查和原子恢复规则。
 - [Windows PowerShell 5 解析 UTF-8 构建脚本失败](experience-Library/2026-07-19-powershell-utf8-build-script.md)：避免无 BOM 中文脚本破坏字符串边界，并要求用实际 PowerShell 完整构建。
 - [复杂双栏中英 PDF 无法导入](experience-Library/2026-07-22-complex-bilingual-pdf.md)：分级解析、坐标分栏、预览确认和 OCR 边界。
+- [连续播放英文和中文静默无声](experience-Library/2026-07-22-continuous-playback-audio.md)：统一 waveOut 播放、中文先生成 WAV，以及正式包声音门禁。
 
 ## 版本规格
 
